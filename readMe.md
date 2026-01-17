@@ -53,7 +53,9 @@ This repository contains a set of Python scripts for **CODESYS** that enable a r
 ### 2. `Project_export.py`
 Exports the current CODESYS project to the selected directory.
 - Creates `.st` files for all POUs, Methods, Actions, Properties, GVLs, and DUTs.
-- Generates a `_metadata.json` file (CRITICAL: Do not delete this, as it's required for importing).
+- Generates a `_metadata.json` file with project info, sync settings, and object mappings.
+- **Safety Check**: Warns if exporting to a directory containing a different project's files.
+- **CRITICAL**: Do not delete `_metadata.json`, as it's required for importing and AutoSync.
 
 ### 3. `Project_import.py`
 Reads the `.st` files in your sync directory and updates the CODESYS project.
@@ -72,10 +74,19 @@ A utility script that removes comments from the files in your sync directory.
 Automatically monitors your exported `.st` files and syncs changes back to CODESYS in real-time.
 - **One-way sync**: Folder → IDE only (external edits update CODESYS)
 - Runs in the background without blocking the IDE
-- Configurable check interval via `TIMEOUT_MS` file (default: 2000ms)
+- **State stored in `_metadata.json`**: `autosync` (RUNNING/STOPPED) and `sync_timeout` (milliseconds)
+- **Default interval**: 10 seconds (10000ms)
 - **Usage**: Run once to START, run again to STOP
+- **Safety checks**: Stops automatically if metadata is missing or project changes
+- **Dynamic updates**: Timeout changes apply immediately on next cycle
 - **Workflow**: Create blocks in IDE → Export → Start AutoSync → Edit files externally
 - **⚠️ CAUTION**: This is an experimental feature. Monitor the CODESYS Messages view for sync status.
+
+### 6. `Project_set_sync_timeout.py`
+Configure the AutoSync check interval.
+- Offers predefined timeout options (2s, 5s, 10s, 15s, 30s)
+- Updates `sync_timeout` in `_metadata.json`
+- **Changes apply immediately** if AutoSync is running (no restart needed)
 
 ---
 
@@ -94,7 +105,7 @@ Automatically monitors your exported `.st` files and syncs changes back to CODES
 ## ⚠️ Important Notes
 
 - **⚠️ BETA STATUS**: This software is in active development. **Always backup your project** before using any script.
-- **Metadata**: Never manually edit or delete `_metadata.json`. It is the link between the files and the CODESYS internal GUIDs.
+- **Metadata**: The `_metadata.json` file contains project info, sync settings, and object mappings. You can manually edit `autosync` and `sync_timeout` if needed, but don't modify the `objects` section.
 - **Backups**: Always save a `.project` backup before running an import.
 - **Markers**: The scripts use specific markers like `// ---` and `// === IMPLEMENTATION ===` to separate declarations from code. These are **preserved** by the comment eraser and should never be removed manually!
 - **Creating New Blocks**: The best workflow is to **create the block name in CODESYS IDE first**, export it, and then fill the content externally. Creating files manually in the folder system will trigger a warning during import because they lack metadata.

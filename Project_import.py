@@ -10,6 +10,7 @@ Usage: Run from CODESYS IDE after exporting with Project_export.py and editing f
 import os
 import codecs
 import json
+import time
 
 # Markers used in export format
 IMPL_MARKER = "// === IMPLEMENTATION ==="
@@ -155,6 +156,7 @@ def import_project(import_dir):
         return
     
     print("=== Starting Project Import ===")
+    start_time = time.time()
     print("Import directory: " + import_dir)
     
     # Load metadata
@@ -257,7 +259,11 @@ def import_project(import_dir):
     print("Failed: " + str(failed_count) + " objects")
     print("Skipped: " + str(skipped_count) + " objects")
     
-    system.ui.info("Import complete!\n\nUpdated: " + str(updated_count) + " objects\nFailed: " + str(failed_count) + "\nSkipped: " + str(skipped_count))
+    elapsed_time = time.time() - start_time
+    print("Time elapsed: {:.2f} seconds".format(elapsed_time))
+    print("Completed at: " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
+    
+    system.ui.info("Import complete!\n\nUpdated: " + str(updated_count) + " objects\nFailed: " + str(failed_count) + "\nSkipped: " + str(skipped_count) + "\nTime elapsed: {:.2f} seconds".format(elapsed_time))
     
     # Warn about untracked items
     if untracked_items:

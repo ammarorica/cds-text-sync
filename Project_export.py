@@ -11,6 +11,7 @@ Usage: Run from CODESYS IDE after setting BASE_DIR with Project_directory.py
 import os
 import codecs
 import json
+import time
 
 # Object type GUIDs for reference
 TYPE_GUIDS = {
@@ -160,6 +161,7 @@ def export_project(export_dir):
         os.makedirs(export_dir)
     
     print("=== Starting Project Export ===")
+    start_time = time.time()
     print("Export directory: " + export_dir)
     
     # Metadata structure
@@ -272,10 +274,13 @@ def export_project(export_dir):
         print("Error writing metadata: " + safe_str(e))
     
     print("=== Export Complete ===")
+    elapsed_time = time.time() - start_time
     print("Exported: " + str(exported_count) + " files")
     print("Skipped: " + str(skipped_count) + " objects (no textual content)")
+    print("Time elapsed: {:.2f} seconds".format(elapsed_time))
+    print("Completed at: " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
     
-    system.ui.info("Export complete!\n\nExported: " + str(exported_count) + " files\nLocation: " + export_dir)
+    system.ui.info("Export complete!\n\nExported: " + str(exported_count) + " files\nLocation: " + export_dir + "\nTime elapsed: {:.2f} seconds".format(elapsed_time))
 
 
 def main():

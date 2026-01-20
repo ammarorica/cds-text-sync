@@ -11,6 +11,7 @@ import os
 import codecs
 import json
 import time
+import re
 from codesys_constants import IMPL_MARKER, TYPE_GUIDS
 from codesys_utils import (
     safe_str, parse_st_file, build_object_cache, 
@@ -63,11 +64,23 @@ def update_object_code(obj, declaration, implementation):
 
 def determine_object_type(content):
     """Determine CODESYS object type from ST content"""
+    # Remove comments and pragmas to avoid false matches
+    
+    # 1. Remove (* ... *) multiline comments
+    content = re.sub(r"\(\*[\s\S]*?\*\)", "", content)
+    
+    # 2. Remove { ... } pragmas/attributes
+    content = re.sub(r"\{[\s\S]*?\}", "", content)
+    
+    # 3. Remove // ... single line comments
+    content = re.sub(r"//.*", "", content)
+    
     content = content.strip()
     lines = content.splitlines()
+    
     for line in lines:
         line = line.strip()
-        if not line or line.startswith("(*") or line.startswith("//") or line.startswith("{"):
+        if not line:
             continue
         
         # Check keywords
@@ -88,7 +101,12 @@ def determine_object_type(content):
             return TYPE_GUIDS["dut"]
         if word == "INTERFACE":
             return TYPE_GUIDS["itf"]
-        break
+        
+        # If we found a valid starting word, we are done. 
+        # If the first non-comment non-empty word isn't a keyword, 
+        # it might be that the file is malformed or this logic needs extension.
+        # But usually ST files start with one of these.
+        
     return None
 
 
@@ -414,6 +432,10 @@ def import_project(import_dir):
             print("Skipped (file missing): " + rel_path)
             skipped_count += 1
             continue
+
+        # Skip folders - they don't have text content to update
+        if obj_info.get("type") == TYPE_GUIDS["folder"] or os.path.isdir(file_path):
+            continue
         
         obj_guid = obj_info.get("guid")
         obj_name = obj_info.get("name")
@@ -511,12 +533,19 @@ def import_project(import_dir):
              path_parts = rel_path.split("/")
              base_name = os.path.splitext(path_parts[-1])[0]
              
-             # Heuristic: Check if likely child
              is_child = False
              child_info = None
+
+             # Special handling for Property Accessors (Get/Set)
+             if base_name in ["Get", "Set"] and len(path_parts) > 1:
+                 type_guid = TYPE_GUIDS["property_accessor"]
+                 p_name = path_parts[-2] # Parent is the folder containing the file
+                 c_name = base_name
+                 child_info = (p_name, c_name)
+                 is_child = True
              
              # If no type detected or explicit method/prop keywords, check naming convention
-             if not type_guid or type_guid in [TYPE_GUIDS["method"], TYPE_GUIDS["property"], TYPE_GUIDS["action"]]:
+             if not is_child and (not type_guid or type_guid in [TYPE_GUIDS["method"], TYPE_GUIDS["property"], TYPE_GUIDS["action"]]):
                  if "." in base_name:
                      parts = base_name.rsplit(".", 1)
                      p_name = parts[0]
@@ -604,6 +633,7 @@ def import_project(import_dir):
             pou_type = None
             is_gvl = (type_guid == TYPE_GUIDS["gvl"])
             is_dut = (type_guid == TYPE_GUIDS["dut"])
+            is_accessor = (type_guid == TYPE_GUIDS["property_accessor"])
             
             if type_guid == TYPE_GUIDS["pou"]:
                 content_upper = content_check.upper()
@@ -630,15 +660,23 @@ def import_project(import_dir):
             # Check existing
             try:
                 existing = None
-                children = create_container.get_children() # Non-recursive for direct children
-                for child in children:
-                    if child.get_name() == obj_name:
-                         existing = child
-                         break
+                try:
+                    children = create_container.get_children() # Non-recursive for direct children
+                    for child in children:
+                        if child.get_name().lower() == obj_name.lower():
+                             existing = child
+                             break
+                except:
+                    pass
                 
                 if existing:
                     print("  Object already exists: " + obj_name)
                     obj = existing
+                elif is_accessor:
+                     # Accessors should exist if parent property exists. If not, we can't easily create them standalone
+                     print("  Warning: Accessor " + obj_name + " not found in " + create_container.get_name())
+                     new_stats["failed"] += 1
+                     return
                 else:
                     print("  Creating object: " + obj_name)
                     
@@ -675,12 +713,40 @@ def import_project(import_dir):
                     elif pou_type is not None:
                         # Simple creation, return type handled by declaration update
                         try:
-                            obj = create_container.create_pou(obj_name, pou_type)
-                        except Exception as e:
-                            # Fallback for Functions which might require a return type GUID
                             if pou_type == PouType.Function:
-                                print("    Warning: Failed to create Function '" + obj_name + "' (" + safe_str(e) + ")")
-                                print("    Fallback: Creating as Program to allow import.")
+                                # Parse return type for Function
+                                return_type_str = "BOOL" # Default
+                                try:
+                                    # Look for FUNCTION <Name> : <Type>
+                                    match = re.search(r"FUNCTION\s+\w+\s*:\s*([\w\.]+)", content_check, re.IGNORECASE)
+                                    if match:
+                                        return_type_str = match.group(1)
+                                except:
+                                    pass
+                                
+                                # Try to resolve return type to a GUID (required for create_pou)
+                                ret_guid = None
+                                found_type = find_object_by_name(return_type_str, name_map)
+                                if found_type:
+                                    try:
+                                        ret_guid = found_type.guid
+                                    except:
+                                        pass
+
+                                if ret_guid:
+                                    print("    Creating Function with type: " + return_type_str)
+                                    obj = create_container.create_pou(obj_name, pou_type, ret_guid)
+                                else:
+                                    # For elementary types or unresolved, create_pou fails if passed a string.
+                                    # Fallback to Program allows import to proceed with correct code update.
+                                    print("    Return type '" + return_type_str + "' is elementary or not found. Creating as Program.")
+                                    obj = create_container.create_pou(obj_name, PouType.Program)
+                            else:
+                                obj = create_container.create_pou(obj_name, pou_type)
+                        except Exception as e:
+                            # Fallback just in case
+                            if pou_type == PouType.Function:
+                                print("    Warning: Creation failed (" + safe_str(e) + "). Fallback to Program.")
                                 obj = create_container.create_pou(obj_name, PouType.Program)
                             else:
                                 raise e

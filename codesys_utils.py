@@ -81,6 +81,8 @@ def save_metadata(base_dir, metadata):
             ordered_metadata["autosync"] = metadata["autosync"]
         if "sync_timeout" in metadata:
             ordered_metadata["sync_timeout"] = metadata["sync_timeout"]
+        if "export_xml" in metadata:
+            ordered_metadata["export_xml"] = metadata["export_xml"]
         
         # Objects last
         if "objects" in metadata:

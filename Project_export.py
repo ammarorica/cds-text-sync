@@ -153,6 +153,7 @@ def export_project(export_dir):
         "export_timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
         "autosync": "STOPPED",
         "sync_timeout": 10000,
+        "export_xml": False,
         "objects": {}
     }
     
@@ -169,6 +170,14 @@ def export_project(export_dir):
             with codecs.open(metadata_path, "r", "utf-8") as f:
                 existing_metadata = json.load(f)
             
+            # Preserve existing settings
+            if "export_xml" in existing_metadata:
+                metadata["export_xml"] = existing_metadata["export_xml"]
+            if "autosync" in existing_metadata:
+                metadata["autosync"] = existing_metadata["autosync"]
+            if "sync_timeout" in existing_metadata:
+                metadata["sync_timeout"] = existing_metadata["sync_timeout"]
+
             existing_project = existing_metadata.get("project_name", "")
             if existing_project and existing_project != current_project_name:
                 message = "WARNING: This directory contains exports from a different project!\n\n"
@@ -205,6 +214,10 @@ def export_project(export_dir):
             
             # Check if object is XML type
             is_xml = obj_type in XML_TYPES
+
+            # Skip XML objects if disabled in metadata
+            if is_xml and not metadata.get("export_xml", False):
+                continue
 
             # Check if object has any textual content
             has_content = False

@@ -98,28 +98,169 @@ def ensure_folder_path(path_str):
     path_str: relative path string e.g. "Folder/SubFolder"
     Returns the parent object (folder) or None if failed.
     """
+    # Find the Application or PLC Logic container to avoid device tree
+    start_obj = None
+    
+    def find_application_recursive(obj, depth=0):
+        """Recursively search for Application or PLC Logic container"""
+        if depth > 3:  # Limit recursion depth
+            return None
+            
+        try:
+            children = obj.get_children()
+            for child in children:
+                try:
+                    child_type = safe_str(child.type)
+                    child_name = safe_str(child.get_name())
+                    
+                    if depth == 0:
+                        print("    - " + child_name + " (type: " + child_type + ")")
+                    
+                    # Found Application - this is what we want!
+                    if child_type == TYPE_GUIDS["application"]:
+                        return child
+                    
+                    # Search inside devices and PLC Logic
+                    if child_type == TYPE_GUIDS["device"] or child_type == TYPE_GUIDS["plc_logic"]:
+                        result = find_application_recursive(child, depth + 1)
+                        if result:
+                            return result
+                except:
+                    continue
+        except:
+            pass
+        return None
+    
+    try:
+        print("  Searching for Application/PLC Logic container...")
+        children = projects.primary.get_children()
+        print("  Found " + str(len(children)) + " top-level children")
+        
+        start_obj = find_application_recursive(projects.primary, 0)
+        
+        if start_obj:
+            try:
+                container_name = safe_str(start_obj.get_name())
+                container_type = safe_str(start_obj.type)
+                print("  >>> Using container: " + container_name + " (type: " + container_type + ")")
+            except:
+                print("  >>> Found container")
+    except Exception as e:
+        print("  Error getting project children: " + safe_str(e))
+        pass
+    
+    # Fallback to primary project if we can't find Application
+    if start_obj is None:
+        print("  Warning: Could not find Application/PLC Logic container, using project root")
+        start_obj = projects.primary
+    
     if not path_str or path_str == ".":
-        return projects.primary
+        return start_obj
         
     parts = path_str.replace("\\", "/").split("/")
-    current_obj = projects.primary
+    current_obj = start_obj
     
     for part in parts:
         if not part: continue
         
-        # Try to find child with this name
-        found = None
-        for child in current_obj.get_children():
-            if child.get_name() == part:
-                found = child
-                break
+        # Try to find child with this name (case-insensitive)
+        matches = []
+        try:
+            children = current_obj.get_children()
+        except:
+            children = []
+            
+        for child in children:
+            if child.get_name().lower() == part.lower():
+                # Exclude devices from matching - we only want code structure
+                try:
+                    child_type = safe_str(child.type)
+                    if child_type == TYPE_GUIDS["device"]:
+                        continue  # Skip devices
+                except:
+                    pass
+                matches.append(child)
         
+        found = None
+        
+        # Debug: show what we found
+        if len(matches) > 0:
+            print("  Found " + str(len(matches)) + " match(es) for '" + part + "':")
+            for m in matches:
+                try:
+                    m_type = safe_str(m.type)
+                    m_name = safe_str(m.get_name())
+                    has_create = "Yes" if hasattr(m, "create_child") else "No"
+                    
+                    # Identify type name
+                    type_name = "unknown"
+                    for k, v in TYPE_GUIDS.items():
+                        if v == m_type:
+                            type_name = k
+                            break
+                    
+                    print("    - " + m_name + " (type: " + type_name + ", can create children: " + has_create + ")")
+                except:
+                    pass
+        
+        # Priority 1: Exact Folder Match (check type, not instance GUID)
+        for m in matches:
+            try:
+                obj_type = safe_str(m.type)
+                if obj_type == TYPE_GUIDS["folder"]:
+                    found = m
+                    print("  >>> Selected folder: " + safe_str(m.get_name()))
+                    break
+            except:
+                pass
+                
+        # Priority 2: Object that definitely supports children (Application, etc)
+        if not found:
+            for m in matches:
+                if hasattr(m, "create_child"):
+                    found = m
+                    try:
+                        print("  Selected object with create_child: " + safe_str(m.get_name()) + " (type: " + safe_str(m.type) + ")")
+                    except:
+                        print("  Selected object with create_child")
+                    break
+                    
+        # Priority 3: Existing exact match checking (fallback)
+        if not found and matches:
+             # Just use the first one if we couldn't find a better one
+             # This might fail later if it's the wrong one, but we have no other choice if we don't want to try creating duplicate
+             found = matches[0]
+             print("  Selected first match: " + safe_str(found.get_name()))
+
         if found:
             current_obj = found
         else:
             # Create folder
             try:
-                print("  Creating folder: " + part)
+                # Get parent name safely
+                try:
+                    parent_name = safe_str(current_obj.get_name())
+                except:
+                    parent_name = "Project Root"
+                    
+                print("  Creating folder: " + part + " in " + parent_name)
+                
+                # Check if parent supports creating children
+                if not hasattr(current_obj, "create_child"):
+                    print("  Error: Parent object " + parent_name + " does not support create_child (Attribute missing)")
+                    # Debug info
+                    try:
+                        print("  Parent GUID: " + safe_str(current_obj.guid))
+                        print("  Parent Type: " + safe_str(current_obj.type))
+                        # Identify what this object type is
+                        obj_type = safe_str(current_obj.type)
+                        for k, v in TYPE_GUIDS.items():
+                             if v == obj_type:
+                                 print("  Parent Type Name: " + k)
+                    except:
+                        pass
+                    return None
+                    
                 current_obj = current_obj.create_child(part, TYPE_GUIDS["folder"])
             except Exception as e:
                 print("  Error creating folder " + part + ": " + safe_str(e))
@@ -138,6 +279,45 @@ def import_project(import_dir):
     print("=== Starting Project Import ===")
     start_time = time.time()
     print("Import directory: " + import_dir)
+    
+    # Find Application container early for object creation
+    print("Searching for Application/PLC Logic container...")
+    app_container = None
+    
+    def find_application_recursive(obj, depth=0):
+        """Recursively search for Application or PLC Logic container"""
+        if depth > 3:
+            return None
+        try:
+            children = obj.get_children()
+            for child in children:
+                try:
+                    child_type = safe_str(child.type)
+                    if child_type == TYPE_GUIDS["application"]:
+                        return child
+                    if child_type == TYPE_GUIDS["device"] or child_type == TYPE_GUIDS["plc_logic"]:
+                        result = find_application_recursive(child, depth + 1)
+                        if result:
+                            return result
+                except:
+                    continue
+        except:
+            pass
+        return None
+    
+    try:
+        app_container = find_application_recursive(projects.primary, 0)
+        if app_container:
+            try:
+                container_name = safe_str(app_container.get_name())
+                print(">>> Using Application container: " + container_name)
+            except:
+                print(">>> Found Application container")
+    except Exception as e:
+        print("  Error searching for Application: " + safe_str(e))
+    
+    if not app_container:
+        print("  Warning: Could not find Application container")
     
     # Load metadata
     metadata_path = os.path.join(import_dir, "_metadata.json")
@@ -270,32 +450,84 @@ def import_project(import_dir):
                 skipped_count += 1
                 continue
             
-            # Create logic
+            # Extract object name from file path
             path_parts = rel_path.split("/")
             obj_name = os.path.splitext(path_parts[-1])[0]
             parent_path = "/".join(path_parts[:-1])
+            print("  Object name: " + obj_name)
             
-            parent = ensure_folder_path(parent_path)
-            if not parent:
-                print("  Failed: Could not ensure parent folder")
-                failed_count += 1
-                continue
-                
+            # Determine the specific object type from content
+            pou_type = None
+            is_gvl = False
+            
+            if type_guid == TYPE_GUIDS["gvl"]:
+                is_gvl = True
+            elif type_guid == TYPE_GUIDS["pou"]:
+                # Determine POU type from content
+                content_upper = content_check.upper()
+                if "PROGRAM " in content_upper:
+                    pou_type = "program"
+                elif "FUNCTION_BLOCK " in content_upper or "FUNCTIONBLOCK " in content_upper:
+                    pou_type = "functionblock"
+                elif "FUNCTION " in content_upper:
+                    pou_type = "function"
+                else:
+                    pou_type = "program"  # Default to program
+            
+            # Get the Application object for creation
+            app_obj = app_container  # Use the Application container we found at the start
+            
             try:
-                # Check for existing
+                # Check for existing - be more specific to avoid name collisions
                 existing = None
-                for child in parent.get_children():
-                    if child.get_name() == obj_name:
-                        existing = child
-                        break
+                try:
+                    all_objects = app_obj.get_children(recursive=True)
+                    for child in all_objects:
+                        if child.get_name() == obj_name:
+                            # Double-check by comparing type to avoid name collisions
+                            try:
+                                child_type = safe_str(child.type)
+                                if (is_gvl and child_type == TYPE_GUIDS["gvl"]) or \
+                                   (pou_type and child_type == TYPE_GUIDS["pou"]):
+                                    existing = child
+                                    break
+                            except:
+                                pass
+                except:
+                    pass
                 
                 if existing:
                     print("  Object already exists: " + obj_name)
                     obj = existing
                 else:
                     print("  Creating object: " + obj_name)
-                    obj = parent.create_child(obj_name, type_guid)
-                    created_count += 1
+                    
+                    # Use dedicated creation methods
+                    if is_gvl:
+                        print("    Using create_gvl()")
+                        obj = app_obj.create_gvl(obj_name)
+                        created_count += 1
+                    elif pou_type:
+                        print("    Using create_pou() with type: " + pou_type)
+                        obj = app_obj.create_pou(obj_name, pou_type)
+                        created_count += 1
+                    else:
+                        print("  Error: Unknown object type for creation")
+                        failed_count += 1
+                        continue
+                        
+                    # Move object to correct folder
+                    if parent_path:
+                        print("    Moving object to: " + parent_path)
+                        dest_folder = ensure_folder_path(parent_path)
+                        if dest_folder:
+                            try:
+                                obj.move(dest_folder)
+                                print("    Moved successfully.")
+                            except Exception as e:
+                                print("    Error moving object: " + safe_str(e))
+                        else:
+                            print("    Warning: Could not find destination folder to move object.")
                     
                 if update_object_code(obj, declaration, implementation):
                     print("  Code updated.")
@@ -309,11 +541,19 @@ def import_project(import_dir):
                     
                     new_hash = calculate_hash(full_content)
                     
+                    # Get parent name safely
+                    parent_name = "Application"
+                    try:
+                        if hasattr(obj, "parent") and obj.parent:
+                            parent_name = safe_str(obj.parent.get_name())
+                    except:
+                        pass
+                    
                     objects_meta[rel_path] = {
                         "guid": safe_str(obj.guid),
                         "type": type_guid,
                         "name": obj_name,
-                        "parent": safe_str(parent.get_name()),
+                        "parent": parent_name,
                         "content_hash": new_hash
                     }
             except Exception as e:

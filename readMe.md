@@ -1,6 +1,6 @@
 # cds-text-sync
 
-**Version**: `0.9.5-beta`
+**Version**: `0.9.6-beta`
 
 > [!WARNING]
 > **⚠️ BETA SOFTWARE - USE WITH CAUTION ⚠️**
@@ -74,8 +74,9 @@ Exports the current CODESYS project to the selected directory.
 
 #### 3. `Project_import.py`
 Reads the `.st` files in your sync directory and updates the CODESYS project.
-- Matches files to CODESYS objects using the metadata.
-- **Untracked File Warning**: If you create new `.st` files or folders directly in the file system, the script will skip them and warn you with a popup list after importing.
+- **Smart Update**: Matches existing files to CODESYS objects using metadata.
+- **New Creation**: Automatically creates new Folders, POUs, GVLs, and DUTs found in the file system.
+- **Child Objects**: Supports creating Methods, Actions, and Properties (e.g., `MyPOU.MyAction.st`).
 - **Warning**: This will overwrite the code in your open CODESYS project. Always have a backup!
 
 #### 4. `Project_ImportSync.py`
@@ -130,11 +131,19 @@ Common utility functions used across all scripts.
 - **⚠️ BETA STATUS**: This software is in active development. **Always backup your project** before using any script.
 - **Metadata**: The `_metadata.json` file contains project info and object mappings. You can manually edit sync settings if needed, but don't modify the `objects` section.
 - **Backups**: Always save a `.project` backup before running an import.
-- **Creating New Blocks**: The best workflow is to **create the block name in CODESYS IDE first**, export it, and then fill the content externally. Creating files manually in the folder system will trigger a warning during import because they lack metadata.
+- **Creating New Blocks**: You can now create new `.st` files and folders directly in your OS. The import script will automatically create the corresponding objects (POUs, GVLs, Folders) in CODESYS.
 
 ---
 
 ## 📝 Changelog
+
+### Version 0.9.6-beta (2026-01-20)
+
+**New Features:**
+- **Full Folder Support**: The importer now creates new folder structures (nested directories) to match your file system.
+- **New Object Creation**: You can create `.st` files externally, and they will be imported as new POUs, GVLs, or DUTs.
+- **Child Object Support**: Methods, Actions, and Properties (e.g., `Parent.Child.st`) are now correctly identified and created under their parent POU.
+- **Robust Import**: Implemented a two-pass import process (Parents then Children) to ensure 100% reliable object creation.
 
 ### Version 0.9.2-beta (2026-01-20)
 

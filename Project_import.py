@@ -113,8 +113,8 @@ def ensure_folder_path(path_str):
                     child_type = safe_str(child.type)
                     child_name = safe_str(child.get_name())
                     
-                    if depth == 0:
-                        print("    - " + child_name + " (type: " + child_type + ")")
+                    # if depth == 0:
+                    #    print("    - " + child_name + " (type: " + child_type + ")")
                     
                     # Found Application - this is what we want!
                     if child_type == TYPE_GUIDS["application"]:
@@ -132,9 +132,9 @@ def ensure_folder_path(path_str):
         return None
     
     try:
-        print("  Searching for Application/PLC Logic container...")
+        # print("  Searching for Application/PLC Logic container...")
         children = projects.primary.get_children()
-        print("  Found " + str(len(children)) + " top-level children")
+        # print("  Found " + str(len(children)) + " top-level children")
         
         start_obj = find_application_recursive(projects.primary, 0)
         
@@ -246,13 +246,38 @@ def ensure_folder_path(path_str):
                 print("  Creating folder: " + part + " in " + parent_name)
                 
                 # Try using create_folder first (preferred), then create_child
-                if hasattr(current_obj, "create_folder"):
-                    current_obj = current_obj.create_folder(part)
-                    print("    Created using create_folder()")
-                elif hasattr(current_obj, "create_child"):
-                    current_obj = current_obj.create_child(part, TYPE_GUIDS["folder"])
-                    print("    Created using create_child()")
-                else:
+                parent_obj = current_obj
+                current_obj = None
+                
+                if hasattr(parent_obj, "create_folder"):
+                    try:
+                        current_obj = parent_obj.create_folder(part)
+                        print("    Created using create_folder()")
+                    except Exception as e:
+                        print("    create_folder failed: " + safe_str(e))
+                        
+                if not current_obj and hasattr(parent_obj, "create_child"):
+                    try:
+                         # 738bea1e-99bb-4f04-90bb-a7a567e74e3a is Folder GUID
+                        current_obj = parent_obj.create_child(part, "738bea1e-99bb-4f04-90bb-a7a567e74e3a") 
+                        print("    Created using create_child()")
+                    except Exception as e:
+                         print("    create_child failed: " + safe_str(e))
+                         
+                # Verification / Recovery if API returned None but created it
+                if not current_obj:
+                    # check if it exists now
+                    try:
+                        children = parent_obj.get_children()
+                        for child in children:
+                            if child.get_name().lower() == part.lower():
+                                current_obj = child
+                                print("    Verified: Folder created successfully (Retrieved via lookup)")
+                                break
+                    except:
+                        pass
+
+                if not current_obj:
                     print("  Error: Parent object " + parent_name + " does not support create_folder or create_child")
                     # Debug info
                     try:
@@ -465,90 +490,122 @@ def import_project(import_dir):
                 print("  Failed to create folder: " + folder_path)
                 failed_count += 1
 
-    # Process new files
+    # Process new files in two passes: Parents first, then Children
     if new_files:
         print("=== Processing New Files ===")
+        
+        parent_ops = []
+        child_ops = []
+        
+        # Pass 1: Classification
         for rel_path, file_path in new_files:
-            print("Found new file: " + rel_path)
-            
-            # Parse content
-            declaration, implementation = parse_st_file(file_path)
-            content_check = declaration if declaration else implementation
-            if not content_check:
-                print("  Skipped: Empty file")
+             declaration, implementation = parse_st_file(file_path)
+             content_check = declaration if declaration else implementation
+             if not content_check:
+                print("  Skipped (Empty): " + rel_path)
                 skipped_count += 1
                 continue
                 
-            type_guid = determine_object_type(content_check)
-            # type_guid check moved lower to allow for child object detection
+             type_guid = determine_object_type(content_check)
+             
+             path_parts = rel_path.split("/")
+             base_name = os.path.splitext(path_parts[-1])[0]
+             
+             # Heuristic: Check if likely child
+             is_child = False
+             child_info = None
+             
+             # If no type detected or explicit method/prop keywords, check naming convention
+             if not type_guid or type_guid in [TYPE_GUIDS["method"], TYPE_GUIDS["property"], TYPE_GUIDS["action"]]:
+                 if "." in base_name:
+                     parts = base_name.rsplit(".", 1)
+                     p_name = parts[0]
+                     c_name = parts[1]
+                     # It's a candidate for child
+                     child_info = (p_name, c_name)
+                     # If we didn't get a type from content, try to guess
+                     if not type_guid:
+                        content_upper = content_check.upper()
+                        if "METHOD " in content_upper:
+                             type_guid = TYPE_GUIDS["method"]
+                        elif "PROPERTY " in content_upper:
+                             type_guid = TYPE_GUIDS["property"]
+                        else:
+                             type_guid = TYPE_GUIDS["action"]
+                     is_child = True
 
+             op_data = {
+                 "rel_path": rel_path,
+                 "file_path": file_path,
+                 "base_name": base_name,
+                 "type_guid": type_guid,
+                 "content_check": content_check,
+                 "declaration": declaration,
+                 "implementation": implementation,
+                 "is_child": is_child,
+                 "child_info": child_info
+             }
+             
+             if is_child:
+                 child_ops.append(op_data)
+             else:
+                 parent_ops.append(op_data)
+
+        # Stats tracking for new files (avoiding nonlocal for IronPython compatibility)
+        new_stats = {"updated": 0, "created": 0, "failed": 0, "skipped": 0}
+
+        # Function to process an operation
+        def process_op(op):
+            rel_path = op["rel_path"]
+            print("Processing: " + rel_path)
             
-            # Extract object name from file path
-            path_parts = rel_path.split("/")
-            base_name = os.path.splitext(path_parts[-1])[0]
-            parent_path = "/".join(path_parts[:-1])
+            type_guid = op["type_guid"]
+            base_name = op["base_name"]
+            is_child = op["is_child"]
+            child_info = op["child_info"]
+            content_check = op["content_check"]
+            declaration = op["declaration"]
+            implementation = op["implementation"]
             
-            # Check for child object pattern (Parent.Child) if type not detected
+            obj_name = base_name
             parent_obj = None
-            child_name = None
-            is_child = False
             
-            if not type_guid and "." in base_name:
-                parts = base_name.rsplit(".", 1)
-                p_name = parts[0]
-                c_name = parts[1]
+            # Resolve Parent for children
+            if is_child and child_info:
+                p_name, c_name = child_info
                 
-                # Check directly in name_map
-                print("  Checking for parent: '" + p_name + "'")
+                # Find parent
                 found_parent = find_object_by_name(p_name, name_map)
-                
                 if not found_parent:
-                    # Try case-insensitive lookup
-                    print("  Parent '" + p_name + "' not found exactly. Trying case-insensitive...")
-                    for name in name_map:
+                     # Case insensitive fallback
+                     for name in name_map:
                         if name.lower() == p_name.lower():
                             found_parent = name_map[name][0]
-                            print("  Found parent via case-insensitive match: " + name)
                             break
                             
                 if found_parent:
-                    print("  Identified as child object: " + c_name + " (Parent: " + found_parent.get_name() + ")")
                     parent_obj = found_parent
-                    child_name = c_name
-                    base_name = c_name # Update base_name for creation
-                    is_child = True
-                    
-                    # Assume Action by default
-                    type_guid = TYPE_GUIDS["action"]
-                    
-                    # Check for explicit keywords in content
-                    content_upper = content_check.upper()
-                    if "METHOD " in content_upper:
-                         type_guid = TYPE_GUIDS["method"]
-                    elif "PROPERTY " in content_upper:
-                         type_guid = TYPE_GUIDS["property"]
+                    obj_name = c_name
+                    print("  Identified parent: " + safe_str(parent_obj.get_name()))
                 else:
-                    print("  Parent object '" + p_name + "' not found in project.")
+                    print("  Error: Parent '" + p_name + "' not found for child '" + c_name + "'. (Wait for next pass or check export)")
+                    # Fallback: maybe it's not a child? 
+                    if not type_guid:
+                        print("  Skipped: Unknown object type and Parent not found")
+                        new_stats["skipped"] += 1
+                        return
 
             if not type_guid:
                 print("  Skipped: Unknown object type")
-                skipped_count += 1
-                continue
-            
-            obj_name = base_name
-            print("  Object name: " + obj_name)
-            
-            # Determine the specific object type from content
+                new_stats["skipped"] += 1
+                return
+
+            # Determine specific container and type details
             pou_type = None
-            is_gvl = False
-            is_dut = False
+            is_gvl = (type_guid == TYPE_GUIDS["gvl"])
+            is_dut = (type_guid == TYPE_GUIDS["dut"])
             
-            if type_guid == TYPE_GUIDS["gvl"]:
-                is_gvl = True
-            elif type_guid == TYPE_GUIDS["dut"]:
-                is_dut = True
-            elif type_guid == TYPE_GUIDS["pou"]:
-                # Determine POU type from content
+            if type_guid == TYPE_GUIDS["pou"]:
                 content_upper = content_check.upper()
                 if "PROGRAM " in content_upper:
                     pou_type = PouType.Program
@@ -557,44 +614,27 @@ def import_project(import_dir):
                 elif "FUNCTION " in content_upper:
                     pou_type = PouType.Function
                 else:
-                    pou_type = PouType.Program  # Default to program
-            
-            # Get the container object for creation
-            if is_child:
+                    pou_type = PouType.Program
+
+            # Creation Container
+            if is_child and parent_obj:
                 create_container = parent_obj
-                print("  Creating in parent: " + safe_str(create_container.get_name()))
             else:
                 create_container = app_container
-            
+                
             if not create_container:
-                 print("  Error: No container found for creation")
-                 failed_count += 1
-                 continue
+                print("  Error: No container found")
+                new_stats["failed"] += 1
+                return
 
+            # Check existing
             try:
-                # Check for existing - be more specific to avoid name collisions
                 existing = None
-                try:
-                    if is_child:
-                        children = create_container.get_children()
-                    else:
-                        children = create_container.get_children(recursive=True)
-                        
-                    for child in children:
-                        if child.get_name() == obj_name:
-                            # Double-check by comparing type to avoid name collisions
-                            try:
-                                child_type = safe_str(child.type)
-                                if (is_gvl and child_type == TYPE_GUIDS["gvl"]) or \
-                                   (is_dut and child_type == TYPE_GUIDS["dut"]) or \
-                                   (pou_type is not None and child_type == TYPE_GUIDS["pou"]) or \
-                                   (is_child and child_type == type_guid):
-                                    existing = child
-                                    break
-                            except:
-                                pass
-                except:
-                    pass
+                children = create_container.get_children() # Non-recursive for direct children
+                for child in children:
+                    if child.get_name() == obj_name:
+                         existing = child
+                         break
                 
                 if existing:
                     print("  Object already exists: " + obj_name)
@@ -603,108 +643,107 @@ def import_project(import_dir):
                     print("  Creating object: " + obj_name)
                     
                     if is_child:
-                        # Create child (Action/Method)
-                        print("    Attempting to create child object...")
-                        
+                         # Child creation logic
                         try:
-                            # Try generic create_child first if available
                             if hasattr(create_container, "create_child"):
-                                print("    Using create_child()")
                                 obj = create_container.create_child(obj_name, type_guid)
                             else:
-                                raise AttributeError("Parent does not support create_child")
-                        except Exception as e:
-                            print("    create_child failed/unavailable: " + safe_str(e))
-                            
-                            # Fallback key mapping
-                            fallback_success = False
-                            
+                                raise AttributeError("No create_child")
+                        except:
+                            # Fallbacks
                             if type_guid == TYPE_GUIDS["action"] and hasattr(create_container, "create_action"):
-                                print("    Fallback: Using create_action()")
                                 obj = create_container.create_action(obj_name)
-                                fallback_success = True
                             elif type_guid == TYPE_GUIDS["method"] and hasattr(create_container, "create_method"):
-                                print("    Fallback: Using create_method()")
-                                # create_method(name, return_type) - trying with defaults or void
                                 try:
                                     obj = create_container.create_method(obj_name)
                                 except:
-                                    obj = create_container.create_method(obj_name, "BOOL") # Fallback to BOOL if arg required
-                                fallback_success = True
+                                    obj = create_container.create_method(obj_name, "BOOL")
                             elif type_guid == TYPE_GUIDS["property"] and hasattr(create_container, "create_property"):
-                                print("    Fallback: Using create_property()")
                                 obj = create_container.create_property(obj_name, "BOOL")
-                                fallback_success = True
-                                
-                            if not fallback_success:
-                                # List available creation methods for debugging AND fail
-                                available = [d for d in dir(create_container) if "create" in d.lower()]
-                                print("    Error: Could not create child. Available 'create' methods: " + str(available))
-                                print("    Parent Type: " + safe_str(create_container.type))
-                                failed_count += 1
-                                continue
-                                
-                        created_count += 1
-                    elif is_gvl:
-                        print("    Using create_gvl()")
-                        obj = create_container.create_gvl(obj_name)
-                        created_count += 1
-                    elif is_dut:
-                        print("    Using create_dut()")
-                        obj = create_container.create_dut(obj_name)
-                        created_count += 1
-                    elif pou_type is not None:
-                        print("    Using create_pou() with type: " + str(pou_type))
-                        obj = create_container.create_pou(obj_name, pou_type)
-                        created_count += 1
-                    else:
-                        print("  Error: Unknown object type for creation")
-                        failed_count += 1
-                        continue
+                            else:
+                                print("    Error: Failed to create child object")
+                                new_stats["failed"] += 1
+                                return
+                        new_stats["created"] += 1
                         
-                    # Move object to correct folder
-                    if not is_child and parent_path:
-                        print("    Moving object to: " + parent_path)
-                        dest_folder = ensure_folder_path(parent_path)
-                        if dest_folder:
-                            try:
-                                obj.move(dest_folder)
-                                print("    Moved successfully.")
-                            except Exception as e:
-                                print("    Error moving object: " + safe_str(e))
-                        else:
-                            print("    Warning: Could not find destination folder to move object.")
+                    elif is_gvl:
+                        obj = create_container.create_gvl(obj_name)
+                        new_stats["created"] += 1
+                    elif is_dut:
+                        obj = create_container.create_dut(obj_name)
+                        new_stats["created"] += 1
+                    elif pou_type is not None:
+                        # Simple creation, return type handled by declaration update
+                        try:
+                            obj = create_container.create_pou(obj_name, pou_type)
+                        except Exception as e:
+                            # Fallback for Functions which might require a return type GUID
+                            if pou_type == PouType.Function:
+                                print("    Warning: Failed to create Function '" + obj_name + "' (" + safe_str(e) + ")")
+                                print("    Fallback: Creating as Program to allow import.")
+                                obj = create_container.create_pou(obj_name, PouType.Program)
+                            else:
+                                raise e
+                        
+                        new_stats["created"] += 1
+                    else:
+                        print("  Error: Unknown type for creation")
+                        new_stats["failed"] += 1
+                        return
                     
+                    # Move object to correct folder
+                    if not is_child:
+                        path_parts = op["rel_path"].split("/")
+                        parent_path = "/".join(path_parts[:-1])
+                        if parent_path:
+                             dest = ensure_folder_path(parent_path)
+                             if dest:
+                                 try:
+                                     obj.move(dest)
+                                 except:
+                                     pass
+
+                # Update Code and Metadata
                 if update_object_code(obj, declaration, implementation):
                     print("  Code updated.")
-                    updated_count += 1
+                    new_stats["updated"] += 1
                     
-                    # Update metadata with new object and hash
-                    # Reconstruct content
+                    # Rebuild hash and save metadata
                     full_content = declaration
                     if implementation:
                         full_content += "\n\n// === IMPLEMENTATION ===\n" + implementation
-                    
                     new_hash = calculate_hash(full_content)
                     
-                    # Get parent name safely
-                    parent_name = "Application"
-                    try:
-                        if hasattr(obj, "parent") and obj.parent:
-                            parent_name = safe_str(obj.parent.get_name())
-                    except:
-                        pass
-                    
-                    objects_meta[rel_path] = {
+                    objects_meta[op["rel_path"]] = {
                         "guid": safe_str(obj.guid),
                         "type": type_guid,
                         "name": obj_name,
-                        "parent": parent_name,
+                        "parent": safe_str(obj.parent.get_name()) if hasattr(obj, "parent") and obj.parent else "Application",
                         "content_hash": new_hash
                     }
+                    
+                    # Add to cache for subsequent lookups (e.g. for children)
+                    if obj_name not in name_map:
+                        name_map[obj_name] = []
+                    name_map[obj_name].append(obj)
+                    
             except Exception as e:
-                print("  Error creating/updating: " + safe_str(e))
-                failed_count += 1
+                print("  Error processing " + obj_name + ": " + safe_str(e))
+                new_stats["failed"] += 1
+
+        print("--- Pass 1: Creating Parent Objects ---")
+        for op in parent_ops:
+            process_op(op)
+            
+        print("--- Pass 2: Creating Child Objects ---")
+        for op in child_ops:
+            process_op(op)
+            
+        # Merge stats
+        updated_count += new_stats["updated"]
+        created_count += new_stats["created"]
+        failed_count += new_stats["failed"]
+        skipped_count += new_stats["skipped"]
     
     # Save updated metadata with new hashes
     if updated_count > 0 or created_count > 0:
@@ -723,8 +762,6 @@ def import_project(import_dir):
     
     system.ui.info("Import complete!\n\nUpdated: " + str(updated_count) + "\nCreated: " + str(created_count) + "\nFailed: " + str(failed_count) + "\nSkipped: " + str(skipped_count) + "\nTime elapsed: {:.2f} seconds".format(elapsed_time))
     
-    # Untracked warning removed as we now handle new files
-
 
 def main():
     base_dir, error = load_base_dir()

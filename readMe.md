@@ -23,8 +23,7 @@ This repository contains a set of Python scripts for **CODESYS** that enable a r
 - **Reversible Sync**: Round-trip export and import of POUs, GVLs, and DUTs.
 - **Git Friendly**: Exports code to standard `.st` (Structured Text) files organized by project hierarchy.
 - **Metadata-Driven**: Uses GUIDs and metadata to ensure reliable updates even if objects are moved or renamed in the project.
-- **Auto-Sync**: Optional background monitoring to automatically sync external file changes to CODESYS IDE.
-- **Safety Checks**: Project identity verification and automatic sync stopping on project changes.
+- **Safety Checks**: Project identity verification on export.
 
 ---
 
@@ -56,7 +55,7 @@ Exports the current CODESYS project to the selected directory.
 - Creates `.st` files for all POUs, Methods, Actions, Properties, GVLs, and DUTs.
 - Generates a `_metadata.json` file with project info, sync settings, and object mappings.
 - **Safety Check**: Warns if exporting to a directory containing a different project's files.
-- **CRITICAL**: Do not delete `_metadata.json`, as it's required for importing and AutoSync.
+- **CRITICAL**: Do not delete `_metadata.json`, as it's required for importing.
 
 ### 3. `Project_import.py`
 Reads the `.st` files in your sync directory and updates the CODESYS project.
@@ -64,23 +63,10 @@ Reads the `.st` files in your sync directory and updates the CODESYS project.
 - **Untracked File Warning**: If you create new `.st` files or folders directly in the file system, the script will skip them and warn you with a popup list after importing.
 - **Warning**: This will overwrite the code in your open CODESYS project. Always have a backup!
 
-### 4. `Project_AutoSync.py` ⚠️ **EXPERIMENTAL**
-Automatically monitors your exported `.st` files and syncs changes back to CODESYS in real-time.
-- **One-way sync**: Folder → IDE only (external edits update CODESYS)
-- Runs in the background without blocking the IDE
-- **State stored in `_metadata.json`**: `autosync` (RUNNING/STOPPED) and `sync_timeout` (milliseconds)
-- **Default interval**: 10 seconds (10000ms)
-- **Usage**: Run once to START, run again to STOP
-- **Safety checks**: Stops automatically if metadata is missing or project changes
-- **Dynamic updates**: Timeout changes apply immediately on next cycle
-- **Workflow**: Create blocks in IDE → Export → Start AutoSync → Edit files externally
-- **⚠️ CAUTION**: This is an experimental feature. Monitor the CODESYS Messages view for sync status.
-
-### 5. `Project_set_sync_timeout.py`
-Configure the AutoSync check interval.
+### 4. `Project_set_sync_timeout.py`
+Configure the sync check interval for exports.
 - Offers predefined timeout options (2s, 5s, 10s, 15s, 30s)
-- Updates `sync_timeout` in `_metadata.json`
-- **Changes apply immediately** if AutoSync is running (no restart needed)
+- Updates timeout settings in `_metadata.json`
 
 ---
 
@@ -99,10 +85,9 @@ Configure the AutoSync check interval.
 ## ⚠️ Important Notes
 
 - **⚠️ BETA STATUS**: This software is in active development. **Always backup your project** before using any script.
-- **Metadata**: The `_metadata.json` file contains project info, sync settings, and object mappings. You can manually edit `autosync` and `sync_timeout` if needed, but don't modify the `objects` section.
+- **Metadata**: The `_metadata.json` file contains project info and object mappings. You can manually edit sync settings if needed, but don't modify the `objects` section.
 - **Backups**: Always save a `.project` backup before running an import.
 - **Creating New Blocks**: The best workflow is to **create the block name in CODESYS IDE first**, export it, and then fill the content externally. Creating files manually in the folder system will trigger a warning during import because they lack metadata.
-- **AutoSync Experimental**: The `Project_AutoSync.py` script is experimental. If you experience issues, stop the sync and use manual export/import workflow instead.
 
 ---
 

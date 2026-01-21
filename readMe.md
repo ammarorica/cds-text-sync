@@ -97,8 +97,7 @@ Configuration hub for the toolset.
   - **ON**: Exports Visualizations, Alarms, TextLists, etc., for full project history.
   - **OFF**: Exports only ST code for faster, cleaner external development.
 
-#### 6. `Erase_comments_add_Header.py`
-Utility to remove comments and add copyright headers to exported files.
+
 
 ### Shared Modules
 

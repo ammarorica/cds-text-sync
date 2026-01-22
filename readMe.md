@@ -175,10 +175,7 @@ Common utility functions used across all scripts.
 - `codesys_constants.py` - Shared constants and type definitions
 - `codesys_utils.py` - Shared utility functions
 - `debug_metadata.py` - Diagnostic tool for troubleshooting
-- `REFACTORING_SUMMARY.md` - Detailed refactoring documentation
 
-**See Also:**
-- [REFACTORING_SUMMARY.md](REFACTORING_SUMMARY.md) for detailed refactoring information
 
 ---
 

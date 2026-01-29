@@ -313,6 +313,7 @@ def import_project(import_dir):
         return
     
     print("=== Starting Project Import ===")
+    print("Import directory: [BASE_DIR]")
     start_time = time.time()
     
     # Find Application container early
@@ -421,6 +422,16 @@ def import_project(import_dir):
             failed_count += 1
             continue
         
+        # Optimization: Check timestamp first
+        current_mtime = safe_str(os.path.getmtime(file_path))
+        stored_mtime = obj_info.get("last_modified", "")
+        stored_hash = obj_info.get("content_hash", "")
+        
+        if current_mtime == stored_mtime and stored_hash:
+            print("  Skipped: " + rel_path + " (Timestamp match)")
+            skipped_count += 1
+            continue
+            
         declaration, implementation = parse_st_file(file_path)
         if declaration is None and implementation is None:
             skipped_count += 1
@@ -428,17 +439,18 @@ def import_project(import_dir):
             
         full_content = format_st_content(declaration, implementation)
         current_hash = calculate_hash(full_content)
-        stored_hash = obj_info.get("content_hash", "")
         
         if current_hash == stored_hash:
-            print("  Skipped: " + rel_path + " (Hash match: " + current_hash[:8] + "...)")
+            print("  Skipped: " + rel_path + " (Hash match, updating timestamp)")
+            obj_info["last_modified"] = current_mtime
             skipped_count += 1
             continue
         
-        print("  Updating: " + rel_path + " (Hash changed: " + stored_hash[:8] + " -> " + current_hash[:8] + ")")
+        print("  Updating: " + rel_path + " (Change detected)")
         if update_object_code(obj, declaration, implementation):
             updated_count += 1
             obj_info["content_hash"] = current_hash
+            obj_info["last_modified"] = current_mtime
         else:
             print("  Warning: No changes applied to " + rel_path)
             skipped_count += 1

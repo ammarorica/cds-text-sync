@@ -401,7 +401,8 @@ def export_project(export_dir):
                 "type": obj_type,
                 "name": obj_name,
                 "parent": safe_str(obj.parent.get_name()) if hasattr(obj, "parent") and obj.parent else None,
-                "content_hash": locals().get("content_hash", "")
+                "content_hash": locals().get("content_hash", ""),
+                "last_modified": safe_str(os.path.getmtime(file_path))
             }
             
             print("Exported: " + rel_path)

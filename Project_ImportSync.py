@@ -40,7 +40,8 @@ from System.Windows.Forms import Timer
 from codesys_constants import IMPL_MARKER, DEFAULT_TIMEOUT_MS, TYPE_GUIDS
 from codesys_utils import (
     safe_str, load_metadata, save_metadata, parse_st_file,
-    build_object_cache, find_object_by_guid, find_object_by_name, load_base_dir
+    build_object_cache, find_object_by_guid, find_object_by_name, load_base_dir,
+    calculate_hash, format_st_content
 )
 
 # Shared constants and utilities imported from modules
@@ -194,6 +195,10 @@ def sync_check():
             
             if update_object_code(obj, declaration, implementation):
                 print("AutoSync: Synced " + obj_name)
+                # Update metadata with new hash and mtime to keep everything in sync
+                obj_info["content_hash"] = calculate_hash(format_st_content(declaration, implementation))
+                obj_info["last_modified"] = safe_str(current_mtime)
+                save_metadata(base_dir, metadata)
         
         except Exception as e:
             print("AutoSync: Error processing " + rel_path + ": " + safe_str(e))
@@ -253,12 +258,20 @@ def start_sync():
     print("AutoSync: Building object cache...")
     guid_map, name_map = build_object_cache(projects.primary)
     
-    # Initialize file states
+    # Initialize file states from metadata (or disk if metadata missing last_modified)
     file_states = {}
     for rel_path in metadata.get("objects", {}).keys():
         file_path = os.path.join(base_dir, rel_path.replace("/", os.sep))
         if os.path.exists(file_path):
-            file_states[file_path] = os.path.getmtime(file_path)
+            obj_info = metadata["objects"][rel_path]
+            stored_mtime = obj_info.get("last_modified", "")
+            try:
+                if stored_mtime:
+                    file_states[file_path] = float(stored_mtime)
+                else:
+                    file_states[file_path] = os.path.getmtime(file_path)
+            except:
+                file_states[file_path] = os.path.getmtime(file_path)
     
     # Store state
     state["base_dir"] = base_dir

@@ -86,7 +86,7 @@ def main():
         return
     
     # Main Menu
-    current_timeout = int(metadata.get("sync_timeout", 10000) / 1000)
+    current_timeout = metadata.get("sync_timeout", 10000) // 1000
     current_xml = "ENABLED" if metadata.get("export_xml", False) else "DISABLED"
     
     msg = "Project Parameters Configuration:\n\n"

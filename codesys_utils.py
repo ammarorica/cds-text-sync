@@ -16,7 +16,7 @@ import threading
 
 # --- Global Thread Lock ---
 _metadata_thread_lock = threading.Lock()
-from codesys_constants import IMPL_MARKER, FORBIDDEN_CHARS
+from codesys_constants import IMPL_MARKER, FORBIDDEN_CHARS, TYPE_GUIDS
 
 
 # --- Logging System ---
@@ -306,6 +306,10 @@ def save_metadata(base_dir, metadata):
             
         # 2. Save object metadata to CSV
         if "objects" in metadata:
+            # Debug: Count methods before saving
+            method_count = sum(1 for obj in metadata["objects"].values() if obj.get("type") == TYPE_GUIDS.get("method"))
+            print("DEBUG save_metadata: Saving " + str(len(metadata["objects"])) + " objects to CSV, including " + str(method_count) + " methods")
+            
             if sys.version_info[0] < 3:
                 f = open(csv_tmp, 'wb')
             else:
@@ -318,6 +322,9 @@ def save_metadata(base_dir, metadata):
                 
                 # Sort objects by path for consistency
                 paths = sorted(metadata["objects"].keys())
+                rows_written = 0
+                methods_written = 0
+                
                 for path in paths:
                     obj = metadata["objects"][path]
                     row = [
@@ -337,6 +344,14 @@ def save_metadata(base_dir, metadata):
                         row = [cell.encode('utf-8') if isinstance(cell, unicode_type) else str(cell) for cell in row]
                         
                     writer.writerow(row)
+                    rows_written += 1
+                    
+                    # Debug: Count methods written
+                    if obj.get("type") == TYPE_GUIDS.get("method"):
+                        methods_written += 1
+                        print("DEBUG save_metadata: Wrote method to CSV: " + path)
+                
+                print("DEBUG save_metadata: Wrote " + str(rows_written) + " rows to CSV, including " + str(methods_written) + " methods")
             finally:
                 f.close()
             

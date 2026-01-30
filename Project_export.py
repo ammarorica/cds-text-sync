@@ -348,11 +348,23 @@ def export_project(export_dir):
             parent_pou = get_parent_pou_name(obj)
             if parent_pou and obj_type in [TYPE_GUIDS["action"], TYPE_GUIDS["method"], 
                                            TYPE_GUIDS["property"], TYPE_GUIDS["property_accessor"]]:
+                # Debug logging for methods
+                if obj_type == TYPE_GUIDS["method"]:
+                    print("DEBUG: Processing method '" + obj_name + "' with parent '" + parent_pou + "'")
+                    print("DEBUG: path_parts before: " + str(path_parts))
+                
                 # Nested objects: ParentPOU.MethodName.st
                 file_name = clean_filename(parent_pou) + "." + clean_name + ".st"
+                
                 # Remove parent POU from path since it's in filename
-                if path_parts and path_parts[-1] == parent_pou:
+                # BUG FIX: Need to clean parent_pou for comparison
+                clean_parent_pou = clean_filename(parent_pou)
+                if path_parts and path_parts[-1] == clean_parent_pou:
                     path_parts = path_parts[:-1]
+                    if obj_type == TYPE_GUIDS["method"]:
+                        print("DEBUG: Removed parent from path_parts")
+                elif path_parts and obj_type == TYPE_GUIDS["method"]:
+                    print("DEBUG: WARNING - Parent POU not found in path! path_parts[-1]=" + path_parts[-1] + ", clean_parent_pou=" + clean_parent_pou)
             elif is_xml:
                 file_name = clean_name + ".xml"
             else:
@@ -404,6 +416,11 @@ def export_project(export_dir):
                 "last_modified": safe_str(os.path.getmtime(file_path))
             }
             
+            # Debug: Log method exports
+            if obj_type == TYPE_GUIDS["method"]:
+                print("DEBUG: Added method to metadata: " + rel_path + " (GUID: " + obj_guid + ")")
+                print("DEBUG: Metadata now has " + str(len(metadata["objects"])) + " objects")
+            
             print("Exported: " + rel_path)
             exported_count += 1
             
@@ -413,6 +430,10 @@ def export_project(export_dir):
     # Cleanup orphaned files (files on disk not in current export)
     if not cleanup_orphaned_files(export_dir, metadata["objects"]):
         return
+    
+    # Debug: Count methods in metadata before saving
+    method_count = sum(1 for obj in metadata["objects"].values() if obj.get("type") == TYPE_GUIDS["method"])
+    print("DEBUG: Before saving - Total objects: " + str(len(metadata["objects"])) + ", Methods: " + str(method_count))
     
     # Write metadata file with consistent field order
     with MetadataLock(export_dir):

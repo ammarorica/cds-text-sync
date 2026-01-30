@@ -275,6 +275,12 @@ def cleanup_ide_orphans(import_dir, objects_meta, guid_map, name_map):
         file_path = os.path.join(import_dir, rel_path.replace("/", os.sep))
         if not os.path.exists(file_path):
             info = objects_meta[rel_path]
+            
+            # Debug: Log methods being considered for deletion
+            if info.get("type") == TYPE_GUIDS["method"]:
+                print("DEBUG: Method file not found, marking as orphan: " + rel_path)
+                print("DEBUG: Expected file path: " + file_path)
+            
             obj = None
             if info.get("guid") and info.get("guid") != "N/A":
                 obj = find_object_by_guid(info["guid"], guid_map)
@@ -439,11 +445,29 @@ def import_project(import_dir):
             obj = None
             if obj_info.get("guid") and obj_info.get("guid") != "N/A":
                 obj = find_object_by_guid(obj_info["guid"], guid_map)
+                
+                # Debug: Log method lookups
+                if obj_info.get("type") == TYPE_GUIDS["method"]:
+                    if obj:
+                        print("DEBUG: Found method by GUID: " + rel_path)
+                    else:
+                        print("DEBUG: Method NOT found by GUID: " + rel_path + " (GUID: " + obj_info["guid"] + ")")
+                        print("DEBUG: guid_map has " + str(len(guid_map)) + " entries")
             
             if obj is None and obj_info.get("name"):
                 obj = find_object_by_name(obj_info["name"], name_map, obj_info.get("parent"))
+                
+                # Debug: Log method name lookups
+                if obj_info.get("type") == TYPE_GUIDS["method"]:
+                    if obj:
+                        print("DEBUG: Found method by name: " + rel_path)
+                    else:
+                        print("DEBUG: Method NOT found by name either: " + rel_path)
             
             if obj is None:
+                # Debug: Log failed method lookups
+                if obj_info.get("type") == TYPE_GUIDS["method"]:
+                    print("DEBUG: Method lookup failed completely: " + rel_path)
                 failed_count += 1
                 continue
             
@@ -630,7 +654,9 @@ def import_project(import_dir):
                              
                              full_content = format_st_content(op["declaration"], op["implementation"])
                              objects_meta[op["rel_path"]] = {
-                                "guid": safe_str(obj.guid), "type": type_guid, "name": obj_name,
+                                "guid": safe_str(obj.guid), 
+                                "type": op["type_guid"],  # FIX: Use op["type_guid"] instead of type_guid
+                                "name": obj_name,
                                 "parent": safe_str(obj.parent.get_name()) if obj.parent else "N/A",
                                 "content_hash": calculate_hash(full_content)
                              }

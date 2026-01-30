@@ -60,7 +60,10 @@ This repository contains a set of Python scripts for **CODESYS** that facilitate
 ### Core Scripts
 
 #### 1. `Project_directory.py`
-**The First Step.** Run this to select the folder on your computer where your code should be synced. This creates a `BASE_DIR` file in the script directory to remember your choice.
+**The First Step.** Run this to select the folder where the project sync will take place. 
+- Requires an open project.
+- Saves the path strictly to **Project Information > Properties** (`cds-sync-folder`).
+- This binds the sync folder to the specific CODESYS project file.
 
 #### 2. `Project_export.py`
 Exports the current CODESYS project to the selected directory.
@@ -123,6 +126,14 @@ Structured Text files are perfect for editing, refactoring, and AI assistance. T
 ---
 
 ## 📝 Changelog
+
+### Version 1.1.0-beta (2026-01-30)
+
+**Project-Bound Configuration:**
+- **Strict Project Sync**: Removed the global `BASE_DIR` fallback. Sync folders are now strictly stored within the CODESYS project itself (`Project Information > Properties > cds-sync-folder`).
+- **Enhanced Isolation**: Different projects now naturally use different sync folders without any manual script reconfiguration.
+- **Workflow Change**: You must have a project open to set or use a sync directory.
+- **Cleanup**: The legacy `BASE_DIR` file is no longer used and can be deleted.
 
 ### Version 1.0.0-beta (2026-01-30)
 

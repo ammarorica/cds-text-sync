@@ -103,26 +103,35 @@ def clean_filename(name):
 
 def load_base_dir():
     """
-    Load base directory from BASE_DIR config file.
+    Load base directory strictly from the open project's custom property 'cds-sync-folder'.
     Returns (base_dir, error_message) tuple.
-    If successful, error_message is None.
     """
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "BASE_DIR")
-    
-    if not os.path.exists(config_path):
-        return None, "Base directory is not set! Please run 'Project_directory.py' first."
-    
     try:
-        with open(config_path, "r") as f:
-            base_dir = f.read().strip()
-        
-        if not os.path.exists(base_dir):
-            return None, "Base directory does not exist: " + base_dir
-        
-        return base_dir, None
+        import projects
+        if not projects.primary:
+            return None, "No project open! Please open a CODESYS project first."
+            
+        info = projects.primary.project_info
+        # ScriptProjectInfo supports indexing and 'in' operator in CODESYS
+        try:
+            if "cds-sync-folder" in info:
+                base_dir = info["cds-sync-folder"]
+                if not base_dir:
+                     return None, "Sync directory is empty in Project Information!\nSet 'cds-sync-folder' in Project Properties or run 'Project_directory.py'."
+                
+                if not os.path.exists(base_dir):
+                    return None, "Project sync directory does not exist: " + base_dir
+                
+                return base_dir, None
+            else:
+                return None, "Project sync directory not set!\nPlease run 'Project_directory.py' or add 'cds-sync-folder' property in Project Information > Properties."
+        except Exception as e:
+            return None, "Error accessing project properties: " + safe_str(e)
+            
     except Exception as e:
-        log_error("Error reading BASE_DIR: " + safe_str(e))
-        return None, "Error reading BASE_DIR. See log for details."
+        # Not in CODESYS environment or serious script engine error
+        log_error("Failed to load project info: " + safe_str(e))
+        return None, "Failure accessing CODESYS project. See log for details."
 
 
 class MetadataLock:

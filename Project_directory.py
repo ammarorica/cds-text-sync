@@ -3,23 +3,30 @@ import os
 
 def set_base_directory():
     # CODESYS provides the 'system' object for UI interactions
-    current_script_dir = os.path.dirname(os.path.abspath(__file__))
-    
+    if not "projects" in globals() or not projects.primary:
+        system.ui.error("No project open! Please open a project to set its sync directory.")
+        return
+
     # Try to read current value for better UX
-    config_path = os.path.join(current_script_dir, "BASE_DIR")
     initial_dir = ""
-    if os.path.exists(config_path):
-        with open(config_path, "r") as f:
-            initial_dir = f.read().strip()
+    try:
+        if "cds-sync-folder" in projects.primary.project_info:
+            initial_dir = projects.primary.project_info["cds-sync-folder"]
+    except:
+        pass
 
     # Open the dialog
-    selected_path = system.ui.browse_directory_dialog("Select Sync Directory", initial_dir)
+    selected_path = system.ui.browse_directory_dialog("Select Sync Directory for this Project", initial_dir)
     
     if selected_path:
-        # Save the path to the text file
-        with open(config_path, "w") as f:
-            f.write(selected_path)
-        print("Success: Base directory updated to: " + selected_path)
+        # Save strictly to project properties
+        try:
+            projects.primary.project_info["cds-sync-folder"] = selected_path
+            print("Success: Project sync directory updated to: " + selected_path)
+            system.ui.info("Sync directory saved to Project Information > Properties.")
+        except Exception as e:
+            system.ui.error("Could not save to project properties: " + str(e))
+            return
         
         # Check _metadata.json for project path mismatch
         try:

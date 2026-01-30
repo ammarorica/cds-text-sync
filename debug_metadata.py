@@ -9,24 +9,83 @@ from codesys_utils import safe_str, load_base_dir, load_metadata, build_object_c
 from codesys_constants import EXPORTABLE_TYPES
 
 def main():
-    base_dir, error = load_base_dir()
-    if error:
-        print("Error loading base dir: " + error)
-        return
-    
-    print("=== Debug Info ===")
-    print("Base directory: " + base_dir)
-    print("")
-    
-    # Check if project is open
-    if not projects.primary:
+    # 1. API Exploration First (doesn't depend on load_base_dir)
+    print("=== CODESYS API Exploration ===")
+    if not "projects" in globals() or not projects.primary:
         print("ERROR: No project open in CODESYS!")
         return
+        
+    proj = projects.primary
+    print("Current project object: " + str(proj))
+    
+    # Check attributes
+    attrs = dir(proj)
+    print("\nProject attributes/methods containing 'info':")
+    print([a for a in attrs if "info" in a.lower()])
+    
+    # Detect Project Info Method
+    info_obj = None
+    if hasattr(proj, "project_info"):
+        print("Using: proj.project_info")
+        info_obj = proj.project_info
+    elif hasattr(proj, "get_project_info"):
+        print("Using: proj.get_project_info()")
+        info_obj = proj.get_project_info()
+    else:
+        print("CRITICAL: No known way to access Project Information found!")
+
+    if info_obj:
+        print("Project Info Contents Exploration:")
+        access_methods = [
+            ("Indexing info_obj['cds-sync-folder']", lambda: info_obj["cds-sync-folder"]),
+            ("Property sets info_obj.property_sets", lambda: info_obj.property_sets),
+            ("Values property info_obj.values", lambda: info_obj.values),
+            ("Summary property info_obj.summary", lambda: info_obj.summary),
+            ("Direct getattr 'cds-sync-folder'", lambda: getattr(info_obj, "cds-sync-folder", "MISSING"))
+        ]
+        
+        for name, method in access_methods:
+            try:
+                res = method()
+                print("  SUCCESS: " + name + " -> " + str(res))
+            except Exception as e:
+                print("  FAILED: " + name + " -> " + str(e))
+        
+        # Try to iterate if somehow possible
+        try:
+             print("Keys via dir(): " + str(dir(info_obj)))
+        except: pass
+        
+    # 2. Now try to load base dir using the utility
+    print("\n=== Sync Configuration Check ===")
+    base_dir, error = load_base_dir()
+    if error:
+        print("Status: " + error)
+    else:
+        print("Base directory: " + base_dir)
     
     print("Current project: " + safe_str(projects.primary))
     
+    # --- API EXPLORATION ---
+    print("\n--- API Exploration (Searching for Project Info) ---")
+    proj_attrs = dir(projects.primary)
+    found_info_methods = [a for a in proj_attrs if "info" in a.lower()]
+    print("Available 'info' related attributes/methods: " + str(found_info_methods))
+    
+    # Try common alternatives
+    for alt in ["get_project_info", "project_info", "get_info"]:
+        if hasattr(projects.primary, alt):
+            try:
+                val = getattr(projects.primary, alt)
+                if callable(val):
+                    print("Found method: " + alt + "() -> " + str(val()))
+                else:
+                    print("Found property: " + alt + " -> " + str(val))
+            except Exception as e:
+                print("Error accessing " + alt + ": " + str(e))
+
     if hasattr(projects.primary, "path"):
-        print("Project path: " + safe_str(projects.primary.path))
+        print("\nProject path: " + safe_str(projects.primary.path))
     
     print("")
     

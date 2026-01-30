@@ -81,15 +81,16 @@ Reads the `.st` files in your sync directory and updates the CODESYS project.
 - **Warning**: This will overwrite the code in your open CODESYS project. Always have a backup!
 - **Sync Deletions**: If you delete a file on disk, the importer will offer to delete the corresponding object in CODESYS.
 
+#### 3. `Project_parameters.py`
+Configure sync parameters for the **current project**.
+- Allows changing the sync timeout and toggling XML export.
+- All changes are saved directly to **Project Information > Properties**.
+
 ### ⏳ Planned / Experimental (Currently Unavailable)
 
-#### `Project_ImportSync.py`
-> [!NOTE]
-> **Deprecated for now.** Auto-synchronization proved unstable in certain IDE versions. Use `Project_import.py` manually to sync changes.
-
-#### `Project_parameters.py`
-> [!NOTE]
-> **Deprecated for now.** XML Export and Global Timeout settings are currently disabled to ensure maximum reliability of the core ST sync engine.
+#### `Project_ImportSync.py` (AutoSync)
+⚠️ **Currently Unavailable / Experimental.**
+A script for automatic change monitoring. Version 1.1.0-beta is undergoing refactoring to align with the new project properties logic.
 
 
 
@@ -129,11 +130,12 @@ Structured Text files are perfect for editing, refactoring, and AI assistance. T
 
 ### Version 1.1.0-beta (2026-01-30)
 
-**Project-Bound Configuration:**
-- **Strict Project Sync**: Removed the global `BASE_DIR` fallback. Sync folders are now strictly stored within the CODESYS project itself (`Project Information > Properties > cds-sync-folder`).
-- **Enhanced Isolation**: Different projects now naturally use different sync folders without any manual script reconfiguration.
-- **Workflow Change**: You must have a project open to set or use a sync directory.
-- **Cleanup**: The legacy `BASE_DIR` file is no longer used and can be deleted.
+**Full Project Integration (Project-Bound Config):**
+- **Source of Truth**: All synchronization settings (`folder`, `timeout`, `xml_export`, `timestamp`) are now stored within the `.project` file under **Project Information > Properties** using the `cds-sync-` prefix.
+- **Portability**: Sync settings are preserved when the project file is moved to another computer.
+- **Legacy Cleanup**: Removed dependence on the global `BASE_DIR` file and local `_config.json` as the sole source of settings.
+- **Mirroring**: Configuration is mirrored to JSON files during export for compatibility with external tools.
+- **AutoSync Status**: The automatic sync script is temporarily disabled to focus on the stability of the core engine.
 
 ### Version 1.0.0-beta (2026-01-30)
 

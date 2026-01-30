@@ -7,11 +7,25 @@ def set_base_directory():
         system.ui.error("No project open! Please open a project to set its sync directory.")
         return
 
+    proj = projects.primary
+    
+    # Get Project Information object safely
+    info = None
+    if hasattr(proj, "get_project_info"):
+        info = proj.get_project_info()
+    elif hasattr(proj, "project_info"):
+        info = proj.project_info
+        
+    if not info:
+        system.ui.error("Could not access Project Information!")
+        return
+
     # Try to read current value for better UX
     initial_dir = ""
     try:
-        if "cds-sync-folder" in projects.primary.project_info:
-            initial_dir = projects.primary.project_info["cds-sync-folder"]
+        props = info.values if hasattr(info, "values") else info
+        if "cds-sync-folder" in props: # Dictionary-like access
+             initial_dir = props["cds-sync-folder"]
     except:
         pass
 
@@ -21,7 +35,8 @@ def set_base_directory():
     if selected_path:
         # Save strictly to project properties
         try:
-            projects.primary.project_info["cds-sync-folder"] = selected_path
+            props = info.values if hasattr(info, "values") else info
+            props["cds-sync-folder"] = selected_path
             print("Success: Project sync directory updated to: " + selected_path)
             system.ui.info("Sync directory saved to Project Information > Properties.")
         except Exception as e:

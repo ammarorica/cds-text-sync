@@ -101,37 +101,64 @@ def clean_filename(name):
     return clean_name
 
 
-def load_base_dir():
-    """
-    Load base directory strictly from the open project's custom property 'cds-sync-folder'.
-    Returns (base_dir, error_message) tuple.
-    """
+def get_project_prop(key, default=None):
+    """Safely get a project property using the appropriate API for this CODESYS version."""
     try:
-        import projects
-        if not projects.primary:
-            return None, "No project open! Please open a CODESYS project first."
+        import __main__
+        proj = None
+        if hasattr(__main__, 'projects'): proj = __main__.projects.primary
+        else:
+            try: proj = projects.primary
+            except: pass
             
-        info = projects.primary.project_info
-        # ScriptProjectInfo supports indexing and 'in' operator in CODESYS
+        if not proj: return default
+        
+        info = proj.get_project_info() if hasattr(proj, "get_project_info") else getattr(proj, "project_info", None)
+        if not info: return default
+        
+        props = info.values if hasattr(info, "values") else info
         try:
-            if "cds-sync-folder" in info:
-                base_dir = info["cds-sync-folder"]
-                if not base_dir:
-                     return None, "Sync directory is empty in Project Information!\nSet 'cds-sync-folder' in Project Properties or run 'Project_directory.py'."
-                
-                if not os.path.exists(base_dir):
-                    return None, "Project sync directory does not exist: " + base_dir
-                
-                return base_dir, None
-            else:
-                return None, "Project sync directory not set!\nPlease run 'Project_directory.py' or add 'cds-sync-folder' property in Project Information > Properties."
-        except Exception as e:
-            return None, "Error accessing project properties: " + safe_str(e)
+            val = props[key]
+            if val is None: return default
+            # Auto-convert types if they look like numbers or booleans
+            s_val = str(val)
+            if s_val.lower() == "true": return True
+            if s_val.lower() == "false": return False
+            if s_val.isdigit(): return int(s_val)
+            return s_val
+        except:
+            return default
+    except:
+        return default
+
+def set_project_prop(key, value):
+    """Safely set a project property."""
+    try:
+        import __main__
+        proj = None
+        if hasattr(__main__, 'projects'): proj = __main__.projects.primary
+        else:
+            try: proj = projects.primary
+            except: pass
             
-    except Exception as e:
-        # Not in CODESYS environment or serious script engine error
-        log_error("Failed to load project info: " + safe_str(e))
-        return None, "Failure accessing CODESYS project. See log for details."
+        if not proj: return False
+        
+        info = proj.get_project_info() if hasattr(proj, "get_project_info") else getattr(proj, "project_info", None)
+        if not info: return False
+        
+        props = info.values if hasattr(info, "values") else info
+        props[key] = str(value)
+        return True
+    except:
+        return False
+
+def load_base_dir():
+    """Load base directory strictly from the project property 'cds-sync-folder'."""
+    base_dir = get_project_prop("cds-sync-folder")
+    if base_dir and os.path.exists(base_dir):
+        return base_dir, None
+    
+    return None, "Project sync directory not set!\nPlease run 'Project_directory.py' or add 'cds-sync-folder' property in Project Information > Properties."
 
 
 class MetadataLock:
@@ -195,19 +222,24 @@ def load_metadata(base_dir):
     """
     metadata = {}
     
-    # 1. Load configuration from _config.json
-    config_path = os.path.join(base_dir, "_config.json")
-    if os.path.exists(config_path):
-        try:
-            with codecs.open(config_path, "r", "utf-8") as f:
-                metadata = json.load(f)
-        except Exception as e:
-            log_error("Error reading _config.json: " + safe_str(e))
-    
-    if not metadata and not os.path.exists(os.path.join(base_dir, "_metadata.csv")):
+    if not base_dir:
         return None
+        
+    # 1. Load configuration from Project Properties (Source of Truth)
+    metadata["project_path"] = safe_str(projects.primary.path) if "projects" in globals() and projects.primary else "N/A"
+    metadata["project_name"] = safe_str(projects.primary) if "projects" in globals() and projects.primary else "N/A"
+    metadata["sync_timeout"] = get_project_prop("cds-sync-timeout", 10000)
+    metadata["export_xml"] = get_project_prop("cds-sync-export-xml", False)
+    metadata["autosync"] = get_project_prop("cds-sync-autosync", "STOPPED")
+    metadata["export_timestamp"] = get_project_prop("cds-sync-timestamp", "N/A")
+    
+    # 2. Check if we have object metadata at all
+    if not os.path.exists(os.path.join(base_dir, "_metadata.csv")):
+        # If no CSV, this might be a fresh folder, but we still have config from project
+        pass
 
-    # 2. Load object metadata from _metadata.csv
+    # 3. Load object metadata from _metadata.csv
+    metadata["objects"] = {}
     csv_path = os.path.join(base_dir, "_metadata.csv")
     if "objects" not in metadata:
         metadata["objects"] = {}
@@ -293,7 +325,16 @@ def save_metadata(base_dir, metadata):
             os.rename(src, dst)
 
     try:
-        # 1. Save configuration fields to JSON
+        # 1. Update Project Properties (Source of Truth)
+        current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+        metadata["export_timestamp"] = current_time
+        
+        set_project_prop("cds-sync-timestamp", current_time)
+        set_project_prop("cds-sync-timeout", metadata.get("sync_timeout", 10000))
+        set_project_prop("cds-sync-export-xml", metadata.get("export_xml", False))
+        set_project_prop("cds-sync-autosync", metadata.get("autosync", "STOPPED"))
+        
+        # 2. Save configuration snapshot to _config.json (Mirror)
         config_fields = [
             "project_name", "project_path", "export_timestamp", 
             "autosync", "sync_timeout", "export_xml"
@@ -302,11 +343,6 @@ def save_metadata(base_dir, metadata):
         for field in config_fields:
             if field in metadata:
                 config_data[field] = metadata[field]
-        
-        # Add any other non-object fields
-        for key in metadata:
-            if key != "objects" and key not in config_data:
-                config_data[key] = metadata[key]
         
         with codecs.open(config_tmp, "w", "utf-8") as f:
             json.dump(config_data, f, indent=2, ensure_ascii=False)

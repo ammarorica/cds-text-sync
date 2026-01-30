@@ -1,6 +1,6 @@
 # cds-text-sync
 
-**Version**: `0.9.9-beta`
+**Version**: `1.0.0-beta`
 
 > [!WARNING]
 > **⚠️ BETA SOFTWARE - USE WITH CAUTION ⚠️**
@@ -15,11 +15,6 @@
 > **Disclaimer**: This is a third-party tool. It is NOT an official product of CODESYS Group and is not affiliated with, sponsored by, or endorsed by CODESYS Group. This tool is provided "as is" and is not a replacement for official CODESYS products (such as CODESYS Git).
 
 This repository contains a set of Python scripts for **CODESYS** that facilitate two modern Git-based workflows:
-
-### 1. 🔍 Monitor & History (The "Observer" Workflow)
-- **Goal**: Track the work of different engineers and maintain a granular history of project changes.
-- **Method**: Exports the entire project—including Visualizations, Alarms, Task Configs, and Project Info—to **Native XML** files.
-- **Benefit**: Even binary-heavy parts of the project become visible in Git, allowing you to see *who* changed *what* and *when*, directly in your version control system. Changes made inside the CODESYS IDE are captured and stored safely.
 
 ### 2. ⚡ External Editing & Sync (The "Developer" Workflow)
 - **Goal**: Edit code using modern external tools (VS Code, Copilot/LLMs) and sync changes back to CODESYS.
@@ -36,9 +31,6 @@ This repository contains a set of Python scripts for **CODESYS** that facilitate
 
 ## 🚀 Key Features
 
-- **Hybrid Export**: Choose between "Code Only" (ST) for development or "Full Project" (ST + XML) for archival and history tracking.
-- **Git Friendly**: Organizes all exports into a clean folder structure matching your project tree.
-- **Smart Metadata**: Uses GUIDs to ensure reliable syncing even if you rename or move objects.
 - **Reversible Sync**: Round-trip editing for Structured Text files.
 - **Safety**: Built-in checks to prevent overwriting the wrong project.
 - **Bi-directional Deletion**: Keep your file system and CODESYS project in sync by removing orphaned files or objects.
@@ -86,19 +78,15 @@ Reads the `.st` files in your sync directory and updates the CODESYS project.
 - **Warning**: This will overwrite the code in your open CODESYS project. Always have a backup!
 - **Sync Deletions**: If you delete a file on disk, the importer will offer to delete the corresponding object in CODESYS.
 
-#### 4. `Project_ImportSync.py`
-Auto-synchronize external file changes to CODESYS (one-way: Folder → IDE).
-- Monitors exported `.st` files for changes
-- Automatically updates CODESYS objects when files are modified
-- Configurable sync interval via `Project_parameters.py`
-- Run once to START, run again to STOP
+### ⏳ Planned / Experimental (Currently Unavailable)
 
-#### 5. `Project_parameters.py`
-Configuration hub for the toolset.
-- **Sync Timeout**: Set the check interval for AutoSync (2s - 30s).
-- **XML Export**: Toggle Native XML export ON/OFF.
-  - **ON**: Exports Visualizations, Alarms, TextLists, etc., for full project history.
-  - **OFF**: Exports only ST code for faster, cleaner external development.
+#### `Project_ImportSync.py`
+> [!NOTE]
+> **Deprecated for now.** Auto-synchronization proved unstable in certain IDE versions. Use `Project_import.py` manually to sync changes.
+
+#### `Project_parameters.py`
+> [!NOTE]
+> **Deprecated for now.** XML Export and Global Timeout settings are currently disabled to ensure maximum reliability of the core ST sync engine.
 
 
 
@@ -115,20 +103,12 @@ Common utility functions used across all scripts.
 
 ## 🔄 Recommended Workflow
 
-### For Version Control & History:
-1.  Open **`Project_parameters.py`** and **Enable XML Export**.
-2.  Run **`Project_export.py`**.
-3.  Commit the result to Git. You now have a snapshot of your entire project, including HMI and configuration.
+1.  Run **`Project_export.py`**.
+2.  Open the `.st` files in VS Code / Cursor to edit logic.
+3.  Run **`Project_import.py`** to push logic changes back to the PLC.
 
-### For External Development:
-1.  Open **`Project_parameters.py`** and **Disable XML Export** (or leave it auto-disabled after the first run).
-2.  Run **`Project_export.py`**.
-3.  Open the `.st` files in VS Code / Cursor to edit logic.
-4.  Run **`Project_import.py`** (or AutoSync) to push logic changes back to the PLC.
-
-**Why different modes?**
-- **XML** files are great for history but can be complex to merge or edit manually.
-- **ST** files are perfect for editing but don't capture the visual layout of an HMI screen.
+**Why focus on ST?**
+Structured Text files are perfect for editing, refactoring, and AI assistance. They provide a clean representation of the project logic that is easy to manage in Git.
 
 ---
 
@@ -143,6 +123,14 @@ Common utility functions used across all scripts.
 ---
 
 ## 📝 Changelog
+
+### Version 1.0.0-beta (2026-01-30)
+
+**Reliability & Performance Milestone:**
+- **Dynamic Parent Resolution**: Newly created child objects (Methods, Actions, Properties) now correctly identify and link to their parents even when created in the same import session.
+- **Folder Path Integrity**: Fixed bug where new objects sometimes defaulted to the root; they now strictly follow the folder structure defined in the file system.
+- **CSV Metadata Engine**: Switched to a CSV-backed metadata system for significantly faster data access and zero corruption risk from semicolons or special characters.
+- **Git Hygiene**: Explicitly untracked local configuration files (`Project_parameters.py`, `Project_ImportSync.py`) and temporary files to keep repositories clean.
 
 ### Version 0.9.9-beta (2026-01-29)
 

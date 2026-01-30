@@ -134,10 +134,24 @@ def format_st_content(declaration, implementation):
 def save_metadata(base_dir, metadata):
     """
     Save metadata: configuration to _config.json and objects to _metadata.csv.
+    Uses atomic writes (temp file + replace) to prevent data corruption.
     """
     config_path = os.path.join(base_dir, "_config.json")
     csv_path = os.path.join(base_dir, "_metadata.csv")
     
+    config_tmp = config_path + ".tmp"
+    csv_tmp = csv_path + ".tmp"
+    
+    def _atomic_replace(src, dst):
+        """Helper for atomic replacement, compatible with Python 2.7 and 3.x"""
+        if hasattr(os, 'replace'):
+            os.replace(src, dst)
+        else:
+            # Fallback for Python 2.7 (Windows)
+            if os.path.exists(dst):
+                os.remove(dst)
+            os.rename(src, dst)
+
     try:
         # 1. Save configuration fields to JSON
         config_fields = [
@@ -154,12 +168,14 @@ def save_metadata(base_dir, metadata):
             if key != "objects" and key not in config_data:
                 config_data[key] = metadata[key]
         
-        with codecs.open(config_path, "w", "utf-8") as f:
+        with codecs.open(config_tmp, "w", "utf-8") as f:
             json.dump(config_data, f, indent=2, ensure_ascii=False)
+        
+        _atomic_replace(config_tmp, config_path)
             
         # 2. Save object metadata to CSV
         if "objects" in metadata:
-            with codecs.open(csv_path, "w", "utf-8") as f:
+            with codecs.open(csv_tmp, "w", "utf-8") as f:
                 # Header
                 f.write("GUID;Name;Path;LastModified;Type;Parent;ContentHash\n")
                 
@@ -176,11 +192,17 @@ def save_metadata(base_dir, metadata):
                     
                     line = ";".join([guid, name, path, last_mod, obj_type, parent, content_hash])
                     f.write(line + "\n")
+            
+            _atomic_replace(csv_tmp, csv_path)
         
-                
         return True
     except Exception as e:
         print("Error saving split metadata: " + safe_str(e))
+        # Cleanup temp files if they exist
+        for tmp_file in [config_tmp, csv_tmp]:
+            if os.path.exists(tmp_file):
+                try: os.remove(tmp_file)
+                except: pass
         return False
 
 

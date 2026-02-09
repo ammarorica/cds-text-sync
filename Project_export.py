@@ -17,12 +17,14 @@ import os
 import codecs
 import json
 import time
+import shutil
 from codesys_constants import TYPE_GUIDS, EXPORTABLE_TYPES, IMPL_MARKER, XML_TYPES
 from codesys_utils import (
     safe_str, clean_filename, load_base_dir,
     save_metadata, calculate_hash, format_st_content,
     log_info, log_warning, log_error, MetadataLock,
-    save_libraries, extract_libraries_from_project
+    save_libraries, extract_libraries_from_project,
+    init_logging, backup_project_binary
 )
 
 # Shared constants and utilities imported from modules
@@ -42,6 +44,11 @@ def get_object_path(obj, stop_at_application=True):
                 break
             
             parent = current.parent
+            
+            # Validate parent has required attributes
+            if not hasattr(parent, "type") or not hasattr(parent, "get_name"):
+                break
+            
             parent_type = safe_str(parent.type)
             
             # Stop at Application level
@@ -68,6 +75,10 @@ def get_parent_pou_name(obj):
     """Get parent POU/Interface name for nested objects (actions, methods, properties)"""
     try:
         if hasattr(obj, "parent") and obj.parent:
+            # Validate parent has required attributes
+            if not hasattr(obj.parent, "type") or not hasattr(obj.parent, "get_name"):
+                return None
+            
             parent_type = safe_str(obj.parent.type)
             if parent_type in [TYPE_GUIDS["pou"], TYPE_GUIDS["itf"]]:
                 return obj.parent.get_name()
@@ -134,10 +145,14 @@ def cleanup_orphaned_files(export_dir, current_objects):
             
         # Check files
         for f in files:
-            # Skip reserved files
-            if f in ["_metadata.json", "_config.json", "_metadata.csv", "BASE_DIR", "sync_debug.log"] or f.startswith("."):
+            # Skip reserved files and folders
+            if f in ["_metadata.json", "_config.json", "_metadata.csv", "BASE_DIR", "sync_debug.log", ".project", ".gitattributes", ".gitignore"] or f.startswith("."):
                 continue
             
+            # Skip project folder if it exists (for Git LFS)
+            if rel_root.startswith("project") or rel_root == "project":
+                continue
+
             # Only consider our export types to be safe
             if not (f.endswith(".st") or f.endswith(".xml")):
                 continue
@@ -211,6 +226,52 @@ def cleanup_orphaned_files(export_dir, current_objects):
         return False
 
 
+def ensure_git_configs(export_dir):
+    """Create .gitignore and .gitattributes if they don't exist."""
+    gitignore_path = os.path.join(export_dir, ".gitignore")
+    gitattributes_path = os.path.join(export_dir, ".gitattributes")
+    
+    # Gitignore handling
+    if not os.path.exists(gitignore_path):
+        content = [
+            "# CODESYS Sync local files",
+            "_config.json",
+            "_metadata.csv",
+            "sync_debug.log",
+            "*.tmp",
+            ""
+        ]
+        try:
+            with codecs.open(gitignore_path, "w", "utf-8") as f:
+                f.write("\n".join(content))
+            print("Created: .gitignore")
+        except: pass
+    else:
+        # File exists, check if sync_debug.log is ignored
+        try:
+            with codecs.open(gitignore_path, "r", "utf-8") as f:
+                lines = f.readlines()
+            
+            if not any("sync_debug.log" in line for line in lines):
+                with codecs.open(gitignore_path, "a", "utf-8") as f:
+                    f.write("\nsync_debug.log\n")
+                print("Updated .gitignore with sync_debug.log")
+        except: pass
+
+    if not os.path.exists(gitattributes_path):
+        content = [
+            "# Git LFS configuration for CODESYS project binary",
+            "*.project filter=lfs diff=lfs merge=lfs -text",
+            ""
+        ]
+        try:
+            with codecs.open(gitattributes_path, "w", "utf-8") as f:
+                f.write("\n".join(content))
+            print("Created: .gitattributes")
+        except: pass
+
+
+
 def export_project(export_dir):
     """Export all project objects to folder structure with metadata"""
     
@@ -221,6 +282,11 @@ def export_project(export_dir):
     # Create export directory
     if not os.path.exists(export_dir):
         os.makedirs(export_dir)
+    
+    # Ensure Git config files exist
+    ensure_git_configs(export_dir)
+    
+    # Create project binary backup (moved down)
     
     print("=== Starting Project Export ===")
     start_time = time.time()
@@ -243,6 +309,19 @@ def export_project(export_dir):
     except:
         pass
     
+    # Read settings from project properties (Source of Truth)
+    from codesys_utils import get_project_prop
+    metadata["export_xml"] = get_project_prop("cds-sync-export-xml", False)
+    metadata["sync_timeout"] = get_project_prop("cds-sync-timeout", 10000)
+    metadata["autosync"] = get_project_prop("cds-sync-autosync", "STOPPED")
+    backup_binary = get_project_prop("cds-sync-backup-binary", False)
+    
+    # Store settings in metadata for reference
+    metadata["settings"] = {
+        "export_xml": metadata["export_xml"],
+        "backup_binary": backup_binary
+    }
+    
     # Check if metadata already exists with different project
     metadata_path = os.path.join(export_dir, "_metadata.json")
     if os.path.exists(metadata_path):
@@ -250,13 +329,8 @@ def export_project(export_dir):
             with codecs.open(metadata_path, "r", "utf-8") as f:
                 existing_metadata = json.load(f)
             
-            # Preserve existing settings
-            if "export_xml" in existing_metadata:
-                metadata["export_xml"] = existing_metadata["export_xml"]
-            if "autosync" in existing_metadata:
-                metadata["autosync"] = existing_metadata["autosync"]
-            if "sync_timeout" in existing_metadata:
-                metadata["sync_timeout"] = existing_metadata["sync_timeout"]
+            # Note: We now prioritize project properties over file metadata
+            # Only preserve settings if they're not in project properties
 
             existing_project = existing_metadata.get("project_name", "")
             if existing_project and existing_project != current_project_name:
@@ -275,6 +349,13 @@ def export_project(export_dir):
             # If we can't read existing metadata, continue with export
             pass
     
+    # Execute binary backup if enabled
+    if backup_binary:
+        print("Binary backup enabled.")
+        backup_project_binary(export_dir, projects)
+    else:
+        print("Binary backup disabled (skipping .project copy).")
+
     # Get all objects recursively
     all_objects = projects.primary.get_children(recursive=True)
     print("Found " + str(len(all_objects)) + " total objects")
@@ -282,8 +363,21 @@ def export_project(export_dir):
     exported_count = 0
     skipped_count = 0
     
+    # Create subdirectories
+    src_dir = os.path.join(export_dir, "src")
+    xml_dir = os.path.join(export_dir, "xml")
+    config_dir = os.path.join(export_dir, "config")
+    
+    for d in [src_dir, xml_dir, config_dir]:
+        if not os.path.exists(d):
+            os.makedirs(d)
+
     for obj in all_objects:
         try:
+            # Validate that object has required methods
+            if not hasattr(obj, 'type') or not hasattr(obj, 'get_name') or not hasattr(obj, 'guid'):
+                continue
+                
             obj_type = safe_str(obj.type)
             obj_name = obj.get_name()
             obj_guid = safe_str(obj.guid)
@@ -296,19 +390,20 @@ def export_project(export_dir):
                 # Add folder itself to path
                 path_parts.append(clean_name)
                 
-                target_dir = os.path.join(export_dir, *path_parts) if path_parts else export_dir
+                # Create folder in src directory
+                target_dir = os.path.join(src_dir, *path_parts) if path_parts else src_dir
                 
                 if not os.path.exists(target_dir):
                     os.makedirs(target_dir)
-                    print("Created folder: " + "/".join(path_parts))
+                    print("Created folder: src/" + "/".join(path_parts))
                 
-                # Add to metadata
-                rel_path = "/".join(path_parts)
+                # Add to metadata (with src/ prefix)
+                rel_path = "src/" + "/".join(path_parts)
                 metadata["objects"][rel_path] = {
                     "guid": obj_guid,
                     "type": obj_type,
                     "name": obj_name,
-                    "parent": safe_str(obj.parent.get_name()) if hasattr(obj, "parent") and obj.parent else None,
+                    "parent": safe_str(obj.parent.get_name()) if hasattr(obj, "parent") and obj.parent and hasattr(obj.parent, "get_name") else None,
                     "content_hash": ""
                 }
                 exported_count += 1
@@ -321,9 +416,15 @@ def export_project(export_dir):
             
             # Check if object is XML type
             is_xml = obj_type in XML_TYPES
+            
+            # Mandatory Configuration Exports
+            is_config = False
+            if obj_type == TYPE_GUIDS["task_config"]:
+                is_config = True
+                is_xml = True # Force XML for config
 
-            # Skip XML objects if disabled in metadata
-            if is_xml and not metadata.get("export_xml", False):
+            # Skip XML objects if disabled in metadata (unless it's mandatory config)
+            if is_xml and not metadata.get("export_xml", False) and not is_config:
                 continue
 
             # Check if object has any textual content
@@ -349,39 +450,52 @@ def export_project(export_dir):
             parent_pou = get_parent_pou_name(obj)
             if parent_pou and obj_type in [TYPE_GUIDS["action"], TYPE_GUIDS["method"], 
                                            TYPE_GUIDS["property"], TYPE_GUIDS["property_accessor"]]:
-                # Debug logging for methods
-                if obj_type == TYPE_GUIDS["method"]:
-                    print("DEBUG: Processing method '" + obj_name + "' with parent '" + parent_pou + "'")
-                    print("DEBUG: path_parts before: " + str(path_parts))
-                
                 # Nested objects: ParentPOU.MethodName.st
                 file_name = clean_filename(parent_pou) + "." + clean_name + ".st"
                 
                 # Remove parent POU from path since it's in filename
-                # BUG FIX: Need to clean parent_pou for comparison
                 clean_parent_pou = clean_filename(parent_pou)
                 if path_parts and path_parts[-1] == clean_parent_pou:
                     path_parts = path_parts[:-1]
-                    if obj_type == TYPE_GUIDS["method"]:
-                        print("DEBUG: Removed parent from path_parts")
-                elif path_parts and obj_type == TYPE_GUIDS["method"]:
-                    print("DEBUG: WARNING - Parent POU not found in path! path_parts[-1]=" + path_parts[-1] + ", clean_parent_pou=" + clean_parent_pou)
             elif is_xml:
                 file_name = clean_name + ".xml"
             else:
                 file_name = clean_name + ".st"
             
+            # Determine Target Directory and Prefix
+            if is_config:
+                base_dir_obj = config_dir
+                prefix = "config"
+                # Config files usually go to root of config dir, ignoring project structure to keep it simple?
+                # The user wants "dumps". Let's keep structure if possible, or flat?
+                # Let's keep structure to avoid collisions.
+            elif is_xml:
+                base_dir_obj = xml_dir
+                prefix = "xml"
+            else:
+                base_dir_obj = src_dir
+                prefix = "src"
+
             # Create target directory
-            target_dir = os.path.join(export_dir, *path_parts) if path_parts else export_dir
+            target_dir = os.path.join(base_dir_obj, *path_parts) if path_parts else base_dir_obj
             if not os.path.exists(target_dir):
                 os.makedirs(target_dir)
             
-            # Write content (ST or XML)
+            
+            # Build full file path
             file_path = os.path.join(target_dir, file_name)
+            
+            # Initialize content_hash
+            content_hash = ""
             
             if is_xml:
                 if not export_native_xml(obj, file_path):
-                    print("Failed to export XML: " + file_name)
+                    skipped_count += 1
+                    continue
+                
+                # Verify that file was actually created
+                if not os.path.exists(file_path):
+                    print("Warning: XML export claimed success but file not found: " + file_name)
                     skipped_count += 1
                     continue
             else:
@@ -401,26 +515,21 @@ def export_project(export_dir):
             
             # Build relative path for metadata
             if path_parts:
-                parts_for_join = path_parts + [file_name]
-                rel_path = os.path.join(*parts_for_join)
+                parts_for_join = [prefix] + path_parts + [file_name]
+                rel_path = "/".join(parts_for_join)
             else:
-                rel_path = file_name
-            rel_path = rel_path.replace("\\", "/")  # Normalize path separators
+                rel_path = prefix + "/" + file_name
+            # rel_path is already forward slashes
             
             # Store metadata
             metadata["objects"][rel_path] = {
                 "guid": obj_guid,
                 "type": obj_type,
                 "name": obj_name,
-                "parent": safe_str(obj.parent.get_name()) if hasattr(obj, "parent") and obj.parent else None,
-                "content_hash": locals().get("content_hash", ""),
+                "parent": safe_str(obj.parent.get_name()) if hasattr(obj, "parent") and obj.parent and hasattr(obj.parent, "get_name") else None,
+                "content_hash": content_hash,
                 "last_modified": safe_str(os.path.getmtime(file_path))
             }
-            
-            # Debug: Log method exports
-            if obj_type == TYPE_GUIDS["method"]:
-                print("DEBUG: Added method to metadata: " + rel_path + " (GUID: " + obj_guid + ")")
-                print("DEBUG: Metadata now has " + str(len(metadata["objects"])) + " objects")
             
             print("Exported: " + rel_path)
             exported_count += 1
@@ -467,7 +576,8 @@ def main():
     if error:
         system.ui.warning(error)
         return
-    
+        
+    init_logging(base_dir)
     export_project(base_dir)
 
 

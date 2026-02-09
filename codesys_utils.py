@@ -12,7 +12,9 @@ import csv
 import sys
 import traceback
 import time
+import tempfile
 import threading
+import shutil
 
 # --- Global Thread Lock ---
 _metadata_thread_lock = threading.Lock()
@@ -20,19 +22,48 @@ from codesys_constants import IMPL_MARKER, FORBIDDEN_CHARS, TYPE_GUIDS
 
 
 # --- Logging System ---
+# --- Logging System ---
 class Logger:
     def __init__(self):
         self.log_file = None
+        self.is_final = False
         
     def _initialize(self, base_dir=None):
-        if self.log_file: return
-        
+        # If explicitly providing base_dir, override everything
+        if base_dir:
+            self.log_file = os.path.join(base_dir, "sync_debug.log")
+            self.is_final = True
+            return
+
+        # If we already have a final path, don't change it unless forced
+        if self.is_final:
+            return
+
+        # Try to find current project base_dir from properties
+        # This can "upgrade" a non-final path to a final one
         try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            self.log_file = os.path.join(script_dir, "sync_debug.log")
+            import projects
+            if projects.primary:
+                info = projects.primary.get_project_info()
+                props = info.values if hasattr(info, "values") else info
+                if "cds-sync-folder" in props:
+                    folder = props["cds-sync-folder"]
+                    if folder and os.path.exists(folder):
+                        self.log_file = os.path.join(folder, "sync_debug.log")
+                        self.is_final = True # We found the real path
+                        return
         except:
-            # Fallback to local dir if everything fails
-            self.log_file = "sync_debug.log"
+            pass
+
+        # Fallback to local dir if we still don't have a path
+        if not self.log_file:
+            try:
+                # Use temp directory to avoid cluttering ScriptDir
+                self.log_file = os.path.join(tempfile.gettempdir(), "cds_sync_debug.log")
+            except:
+                pass
+            # allow overwriting later since this is a fallback
+            self.is_final = False
 
     def log(self, level, message, include_traceback=False):
         self._initialize()
@@ -57,6 +88,11 @@ def log_info(message):
 
 def log_warning(message):
     _logger.log("WARNING", message)
+
+def init_logging(base_dir):
+    """Explicitly set the logging directory"""
+    if base_dir and os.path.exists(base_dir):
+        _logger._initialize(base_dir)
 
 def log_error(message, critical=False):
     _logger.log("ERROR", message, include_traceback=True)
@@ -616,10 +652,15 @@ def load_libraries(base_dir):
     Load library list from _libraries.csv.
     """
     libraries = []
-    csv_path = os.path.join(base_dir, "_libraries.csv")
+    csv_path = os.path.join(base_dir, "config", "_libraries.csv")
     
     if not os.path.exists(csv_path):
-        return libraries
+        # Fallback to root for backward compatibility
+        root_csv = os.path.join(base_dir, "_libraries.csv")
+        if os.path.exists(root_csv):
+            csv_path = root_csv
+        else:
+            return libraries
 
     try:
         if sys.version_info[0] < 3:
@@ -658,7 +699,14 @@ def save_libraries(base_dir, libraries):
     """
     Save library list to _libraries.csv.
     """
-    csv_path = os.path.join(base_dir, "_libraries.csv")
+    config_dir = os.path.join(base_dir, "config")
+    if not os.path.exists(config_dir):
+        try:
+            os.makedirs(config_dir)
+        except:
+            pass
+            
+    csv_path = os.path.join(config_dir, "_libraries.csv")
     csv_tmp = csv_path + ".tmp"
     
     def _atomic_replace(src, dst):
@@ -807,3 +855,53 @@ def find_object_by_name(name, name_map, parent_name=None):
     
     # Return first match if no parent filter or no parent match
     return found[0]
+
+
+def backup_project_binary(export_dir, projects_obj=None):
+    """
+    Copy the current project binary to the /project folder.
+    Forces a project save before copying to ensure the backup is current.
+    """
+    try:
+        if not projects_obj:
+            try:
+                import projects
+                projects_obj = projects
+            except:
+                pass
+        
+        if not projects_obj or not hasattr(projects_obj, "primary") or not projects_obj.primary:
+            log_warning("Cannot identify project for backup.")
+            print("Debug: Cannot identify project for backup (projects_obj missing or invalid).")
+            return
+
+        # Force save to ensure we backup the latest state
+        try:
+            projects_obj.primary.save()
+            log_info("Project saved for backup.")
+        except Exception as e:
+            msg = "Could not save project before backup: " + safe_str(e)
+            log_warning(msg)
+            print("Debug: " + msg)
+
+        if not hasattr(projects_obj.primary, "path") or not projects_obj.primary.path:
+            log_warning("Project not saved to disk yet. Skipping binary backup.")
+            print("Debug: Project has no path on disk.")
+            return
+
+        project_path = projects_obj.primary.path
+        project_folder = os.path.join(export_dir, "project")
+        
+        if not os.path.exists(project_folder):
+            os.makedirs(project_folder)
+            
+        file_name = os.path.basename(project_path)
+        target_path = os.path.join(project_folder, file_name)
+        
+        shutil.copy2(project_path, target_path)
+        log_info("Binary backup updated: project/" + file_name)
+        print("Binary backup updated.")
+        
+    except Exception as e:
+        log_error("Warning: Could not create binary backup: " + str(e))
+        print("Warning: Could not create binary backup: " + str(e))

@@ -1,59 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 Project_parameters.py - Configure Project parameters
-1. Set sync timeout
-2. Toggle XML Export
+1. Toggle XML Export
+2. Toggle Project Binary Backup
 
-Updates parameters in _metadata.json
+Updates parameters in Project Information > Properties
 """
 import os
-import codecs
-import json
 from codesys_utils import safe_str, load_base_dir, get_project_prop, set_project_prop
-import time
-
-def configure_timeout():
-    # Get current timeout from Project Prop
-    current_timeout = get_project_prop("cds-sync-timeout", 10000)
-    
-    # Offer predefined timeout options
-    message = "Current AutoSync timeout: " + str(current_timeout) + "ms\n\nSelect new timeout interval:"
-    options = (
-        "2 seconds (2000ms)",
-        "5 seconds (5000ms)",
-        "10 seconds (10000ms) - Default",
-        "15 seconds (15000ms)",
-        "30 seconds (30000ms)",
-        "Cancel"
-    )
-    
-    result = system.ui.choose(message, options)
-    
-    if result[0] == 5:  # Cancel
-        return False
-    
-    # Map selection to timeout value
-    timeout_map = {0: 2000, 1: 5000, 2: 10000, 3: 15000, 4: 30000}
-    new_timeout = timeout_map.get(result[0], 10000)
-    
-    set_project_prop("cds-sync-timeout", new_timeout)
-    return True
-
-def configure_xml_export():
-    # Get current setting from Project Prop
-    current_setting = get_project_prop("cds-sync-export-xml", False)
-    status_text = "ENABLED" if current_setting else "DISABLED"
-    
-    message = "XML Export is currently: " + status_text + "\n\nDo you want to enable or disable native XML export?\n(Visualizations, Alarms, TextLists, etc.)"
-    
-    options = ("Enable XML Export", "Disable XML Export", "Cancel")
-    result = system.ui.choose(message, options)
-    
-    if result[0] == 2: return False
-        
-    new_setting = (result[0] == 0)
-    set_project_prop("cds-sync-export-xml", new_setting)
-    return True
 
 def main():
     base_dir, error = load_base_dir()
@@ -61,29 +15,50 @@ def main():
         system.ui.warning(error)
         return
     
-    # Main Menu
-    current_timeout = get_project_prop("cds-sync-timeout", 10000) // 1000
-    current_xml = "ENABLED" if get_project_prop("cds-sync-export-xml", False) else "DISABLED"
-    
-    msg = "Project Parameters Configuration (Saved in Project):\n\n"
-    msg += "1. Sync Timeout: " + str(current_timeout) + "s\n"
-    msg += "2. Export XML: " + current_xml + "\n"
-    
-    options = ("Set sync timeout", "Toggle XML export", "Exit")
-    result = system.ui.choose(msg, options)
-    
-    changed = False
-    if result[0] == 0:
-        changed = configure_timeout()
-    elif result[0] == 1:
-        changed = configure_xml_export()
-    else:
-        return
+    while True:
+        # Get current settings
+        export_xml = get_project_prop("cds-sync-export-xml", False)
+        backup_binary = get_project_prop("cds-sync-backup-binary", False)
+        save_after_import = get_project_prop("cds-sync-save-after-import", True)
+
+        # Build menu options
+        xml_opt = "[x] Export Native XML (Visu/Alarms)" if export_xml else "[ ] Export Native XML (Visu/Alarms)"
+        backup_opt = "[x] Backup .project binary (Git LFS)" if backup_binary else "[ ] Backup .project binary (Git LFS)"
+        save_opt = "[x] Save Project after Import" if save_after_import else "[ ] Save Project after Import"
         
-    if changed:
-        print("Parameters updated in Project Properties.")
-        # Recursive call to show menu again
-        main()
+        message = "Configure Project Sync Parameters:\n(Settings are saved in Project Information)"
+        
+        options = (
+            xml_opt,
+            backup_opt,
+            save_opt,
+            "Exit"
+        )
+        
+        try:
+            result = system.ui.choose(message, options)
+        except:
+            return
+
+        if result is None: # Dialog closed
+            return
+            
+        choice = result[0]
+        
+        if choice == 0: # Toggle XML
+            set_project_prop("cds-sync-export-xml", not export_xml)
+            print("Updated XML Export -> " + str(not export_xml))
+            
+        elif choice == 1: # Toggle Backup
+            set_project_prop("cds-sync-backup-binary", not backup_binary)
+            print("Updated Binary Backup -> " + str(not backup_binary))
+            
+        elif choice == 2: # Toggle Save
+            set_project_prop("cds-sync-save-after-import", not save_after_import)
+            print("Updated Save After Import -> " + str(not save_after_import))
+            
+        else: # Exit
+            return
 
 if __name__ == "__main__":
     main()

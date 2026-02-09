@@ -19,7 +19,8 @@ from codesys_utils import (
     find_object_by_guid, find_object_by_name, load_base_dir,
     calculate_hash, save_metadata, load_metadata,
     format_st_content, log_info, log_warning, log_error, MetadataLock,
-    load_libraries, extract_libraries_from_project
+    load_libraries, extract_libraries_from_project,
+    init_logging, get_project_prop, backup_project_binary
 )
 
 # Shared constants and utilities imported from modules
@@ -405,8 +406,12 @@ def import_project(import_dir):
         system.ui.error("No project open!")
         return
     
+    # Check save setting
+    should_save = get_project_prop("cds-sync-save-after-import", True)
+    
     print("=== Starting Project Import ===")
     print("Import directory: " + import_dir)
+    print("Auto-save enabled: " + str(should_save))
     start_time = time.time()
     
     # Find Application container early
@@ -578,10 +583,19 @@ def import_project(import_dir):
         if new_folders:
             new_folders.sort(key=len)
             for folder_path in new_folders:
+                # Only process folders in src directory
+                if not folder_path.startswith("src"):
+                    continue
+                if folder_path == "src":
+                    continue
+                    
+                # Calculate CODESYS path (remove src prefix)
+                codesys_path = folder_path[4:] if folder_path.startswith("src/") else ""
+                
                 if folder_path in folder_cache:
                     created_folder = folder_cache[folder_path]
                 else:
-                    created_folder = ensure_folder_path(folder_path)
+                    created_folder = ensure_folder_path(codesys_path)
                     folder_cache[folder_path] = created_folder
                     
                 if created_folder:
@@ -600,6 +614,10 @@ def import_project(import_dir):
             child_ops = []
             
             for rel_path, file_path in new_files:
+                 # Only process files in src directory
+                 if not rel_path.startswith("src/"):
+                     continue
+                 
                  declaration, implementation = parse_st_file(file_path)
                  content_check = declaration if declaration else implementation
                  if not content_check:
@@ -607,7 +625,13 @@ def import_project(import_dir):
                     continue
                     
                  type_guid = determine_object_type(content_check)
-                 path_parts = rel_path.split("/")
+                 # Strip src/ prefix for path parsing
+                 filesys_path_parts = rel_path.split("/")
+                 if filesys_path_parts[0] == "src":
+                     path_parts = filesys_path_parts[1:]
+                 else:
+                     path_parts = filesys_path_parts
+                     
                  base_name = os.path.splitext(path_parts[-1])[0]
                  
                  is_child = False
@@ -669,14 +693,21 @@ def import_project(import_dir):
                         print("  Error: Could not find parent " + p_name + " for new object " + c_name)
                 else:
                     # New parent object - resolve folder path
-                    rel_path = op["rel_path"]
+                    rel_path = op["rel_path"] # e.g. src/Folder/POU.st
+                    
                     if "/" in rel_path:
-                        folder_path = "/".join(rel_path.split("/")[:-1])
-                        if folder_path in folder_cache:
-                            create_container = folder_cache[folder_path]
+                        # logical_folder_path: src/Folder
+                        logical_folder_path = "/".join(rel_path.split("/")[:-1])
+                        
+                        if logical_folder_path == "src":
+                             create_container = app_container
+                        elif logical_folder_path in folder_cache:
+                            create_container = folder_cache[logical_folder_path]
                         else:
-                            create_container = ensure_folder_path(folder_path)
-                            folder_cache[folder_path] = create_container
+                            # Parse CODESYS path
+                            codesys_path = logical_folder_path[4:] if logical_folder_path.startswith("src/") else logical_folder_path
+                            create_container = ensure_folder_path(codesys_path)
+                            folder_cache[logical_folder_path] = create_container
                     else:
                         create_container = app_container
 
@@ -747,6 +778,30 @@ def import_project(import_dir):
         
         if updated_count > 0 or created_count > 0 or (deleted_from_ide and len(deleted_from_ide) > 0):
             save_metadata(import_dir, metadata)
+            
+            # Check binary backup setting
+            backup_binary = get_project_prop("cds-sync-backup-binary", False)
+
+            # We must save if:
+            # 1. User wants save after import (should_save)
+            # 2. OR User wants binary backup (backup_binary) - because backup requires saved project
+            must_save = should_save or backup_binary
+            
+            if must_save:
+                try:
+                    print("  Saving project...")
+                    projects.primary.save()
+                    
+                    # After successful save, check if we need to update backup
+                    if backup_binary:
+                        print("  Updating binary backup...")
+                        # Pass projects Explicitly
+                        backup_project_binary(import_dir, projects)
+                        
+                except Exception as e:
+                    print("  Warning: Could not save project: " + safe_str(e))
+            else:
+                print("  Skipping project save (user option).")
     
     print("=== Import Complete ===")
     print("  Updated: " + str(updated_count))
@@ -769,9 +824,20 @@ def main():
         return
     
     message = "WARNING: This operation will overwrite CODESYS objects with data from the export directory.\n\nAre you sure you want to proceed?"
-    result = system.ui.choose(message, ("Yes, Overwrite Data", "No, Cancel"))
     
-    if result[0] == 0:
+    try:
+        result = system.ui.choose(message, ("Yes, Overwrite Data", "No, Cancel"))
+    except:
+        # Fallback for UI-less execution
+        init_logging(base_dir)
+        import_project(base_dir)
+        return
+
+    if result is None: # Dialog closed
+        return
+        
+    if result[0] == 0: # Yes
+        init_logging(base_dir)
         import_project(base_dir)
 
 

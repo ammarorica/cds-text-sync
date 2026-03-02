@@ -5,6 +5,7 @@ codesys_managers.py - Object Manager classes for CODESYS synchronization
 Extracts object-specific logic for export and import operations.
 """
 import os
+import json
 import codecs
 import tempfile
 import zlib
@@ -15,6 +16,16 @@ from codesys_utils import (
     resolve_projects, is_container_device
 )
 from codesys_constants import TYPE_GUIDS, XML_TYPES, EXPORTABLE_TYPES, XML_TYPES as XML_TYPES_CONST
+
+# #region agent log
+def _debug_log(location, message, data, hypothesis_id):
+    try:
+        _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug-c26be2.log")
+        with open(_p, "a", encoding="utf-8") as _f:
+            _f.write(json.dumps({"sessionId": "c26be2", "location": location, "message": message, "data": data, "hypothesisId": hypothesis_id, "timestamp": __import__("time").time() * 1000}) + "\n")
+    except Exception:
+        pass
+# #endregion
 
 # --- Helper Functions ---
 
@@ -369,6 +380,10 @@ def collect_property_accessors(all_objects):
         except:
             continue
     
+    # #region agent log
+    _prop_count = sum(1 for o in all_objects if (getattr(o, "type", None) and safe_str(o.type) == TYPE_GUIDS["property"]))
+    _debug_log("codesys_managers.py:collect_property_accessors", "property count vs accessors dict size", {"properties_in_tree": _prop_count, "properties_with_accessors": len(property_accessors)}, "H3")
+    # #endregion
     return property_accessors
 
 def classify_object(obj):
@@ -648,10 +663,13 @@ class PropertyManager(POUManager):
         obj_name = obj.get_name()
         
         if obj_guid not in context['property_accessors']:
-            log_warning("Property " + obj_name + " has no textual accessors, skipping ST export.")
-            return False
-            
-        prop_data = context['property_accessors'][obj_guid]
+            # #region agent log
+            _debug_log("codesys_managers.py:PropertyManager.export", "property not in property_accessors, would skip", {"obj_name": obj_name, "obj_guid": obj_guid[:8]}, "H1")
+            # #endregion
+            # Export property with declaration only (no Get/Set accessors)
+            prop_data = {'get': None, 'set': None}
+        else:
+            prop_data = context['property_accessors'][obj_guid]
         
         effective_type = context.get('effective_type', safe_str(obj.type))
         rel_path = build_expected_path(obj, effective_type, False)
@@ -675,15 +693,18 @@ class PropertyManager(POUManager):
         if prop_data['set']:
             set_decl, set_impl_raw = export_object_content(prop_data['set'])
             set_impl = format_st_content(set_decl, set_impl_raw)
-            
+        
+        # #region agent log
         if not get_impl and not set_impl:
+            _debug_log("codesys_managers.py:PropertyManager.export", "both get_impl and set_impl empty, would skip", {"obj_name": obj_name, "has_get_obj": bool(prop_data.get("get")), "has_set_obj": bool(prop_data.get("set"))}, "H2")
+        # #endregion
+        # Always export: declaration only when no Get/Set content
+        combined_content = format_property_content(declaration, get_impl, set_impl)
+        if not combined_content.strip():
             return False
-            
         if not os.path.exists(target_dir):
             os.makedirs(target_dir)
-            
-        # Combine into Property Format
-        combined_content = format_property_content(declaration, get_impl, set_impl)
+        
         content_hash = calculate_hash(combined_content)
         
         is_new = not os.path.exists(file_path)

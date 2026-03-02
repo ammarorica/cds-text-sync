@@ -351,14 +351,14 @@ def collect_property_accessors(all_objects):
             if obj_type == TYPE_GUIDS["property"]:
                 obj_guid = safe_str(obj.guid)
                 try:
+                    if obj_guid not in property_accessors:
+                        property_accessors[obj_guid] = {
+                            'get': None, 'set': None, 'parent_obj': obj
+                        }
                     children = obj.get_children()
                     for child in children:
                         child_type = safe_str(child.type)
                         if child_type == TYPE_GUIDS["property_accessor"]:
-                            if obj_guid not in property_accessors:
-                                property_accessors[obj_guid] = {
-                                    'get': None, 'set': None, 'parent_obj': obj
-                                }
                             child_name = child.get_name().lower()
                             if child_name == "get":
                                 property_accessors[obj_guid]['get'] = child
@@ -648,8 +648,7 @@ class PropertyManager(POUManager):
         obj_name = obj.get_name()
         
         if obj_guid not in context['property_accessors']:
-            # Export property with declaration only (no Get/Set accessors)
-            prop_data = {'get': None, 'set': None}
+            prop_data = {'get': None, 'set': None, 'parent_obj': obj}
         else:
             prop_data = context['property_accessors'][obj_guid]
         
@@ -675,14 +674,14 @@ class PropertyManager(POUManager):
         if prop_data['set']:
             set_decl, set_impl_raw = export_object_content(prop_data['set'])
             set_impl = format_st_content(set_decl, set_impl_raw)
-        
-        # Always export: declaration only when no Get/Set content
-        combined_content = format_property_content(declaration, get_impl, set_impl)
-        if not combined_content.strip():
-            return False
+            
+        # Export even if implementations are empty
+            
         if not os.path.exists(target_dir):
             os.makedirs(target_dir)
-        
+            
+        # Combine into Property Format
+        combined_content = format_property_content(declaration, get_impl, set_impl)
         content_hash = calculate_hash(combined_content)
         
         is_new = not os.path.exists(file_path)

@@ -1084,15 +1084,10 @@ class PropertyManager(POUManager):
                 if declaration:
                     update_object_code(obj, declaration, None)
                 
-                if get_impl_combined and hasattr(obj, "create_get_accessor"):
-                    get_obj = obj.create_get_accessor()
-                    g_decl, g_code = parse_accessor_content(get_impl_combined)
-                    update_object_code(get_obj, g_decl, g_code)
-                    
-                if set_impl_combined and hasattr(obj, "create_set_accessor"):
-                    set_obj = obj.create_set_accessor()
-                    s_decl, s_code = parse_accessor_content(set_impl_combined)
-                    update_object_code(set_obj, s_decl, s_code)
+                # create_property usually pre-creates empty Get/Set accessors, so
+                # fill those existing children and only create when absent.
+                self._apply_accessor(obj, "get", "create_get_accessor", get_impl_combined)
+                self._apply_accessor(obj, "set", "create_set_accessor", set_impl_combined)
                 
                 if attrs:
                     write_ide_attrs(obj, attrs)
@@ -1101,6 +1096,21 @@ class PropertyManager(POUManager):
         except Exception as e:
             log_error("Failed to create property " + name + ": " + safe_str(e))
         return None
+
+    def _apply_accessor(self, prop_obj, accessor_name, create_method, combined_content):
+        if not combined_content:
+            return
+        accessor = None
+        for child in prop_obj.get_children():
+            if child.get_name().lower() == accessor_name:
+                accessor = child
+                break
+        if accessor is None and hasattr(prop_obj, create_method):
+            accessor = getattr(prop_obj, create_method)()
+        if accessor is None:
+            return
+        decl, code = parse_accessor_content(combined_content)
+        update_object_code(accessor, decl, code)
 
 class NativeManager(ObjectManager):
     """Handle objects exported as native CODESYS XML"""

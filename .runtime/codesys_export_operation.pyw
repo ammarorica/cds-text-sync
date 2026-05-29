@@ -111,6 +111,15 @@ def build_export_plan(all_objects, export_dir, cache_data=None):
                 is_xml = cached_type[1]
                 rel_path = cached_type[2] if len(cached_type) > 2 else None
                 should_skip = False if rel_path else True
+                if not should_skip:
+                    # The GUID-keyed cache survives folder moves, so recompute the
+                    # live path and follow a move to the new location.
+                    try:
+                        live_path = build_expected_path(obj, resolution)
+                        if live_path and normalize_path(live_path) != normalize_path(rel_path):
+                            rel_path = live_path
+                    except Exception:
+                        pass
                 rel_path, resolution = _apply_nvl_path_hint(rel_path, resolution, export_dir)
             else:
                 effective_type = resolution.get("manager_key") or resolution.get("semantic_kind") or resolution.get("canonical_guid")

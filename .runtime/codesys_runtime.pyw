@@ -3,8 +3,8 @@
 codesys_runtime.py - Shared loader, runtime, and UI adapters for CODESYS scripts.
 
 This module separates interactive and headless execution so the same operation
-modules can be used both from user-facing Project_*.py entrypoints and from the
-dev automation bridge.
+modules can be used both from user-facing entrypoints and from the dev
+automation bridge.
 """
 from __future__ import print_function
 import os
@@ -24,22 +24,24 @@ except ImportError:
 
 
 CORE_MODULES = [
-    "codesys_constants",
     "codesys_utils",
-    "codesys_managers",
-    "codesys_ui",
-    "codesys_compare_engine"
+    "codesys_ui"
 ]
 
 OPERATION_MODULES = {
-    "export": "codesys_export_operation",
-    "import": "codesys_import_operation",
+    "export": "codesys_extractor_operation",
+    "import": "codesys_injector_operation",
+    "extract": "codesys_extractor_operation",
+    "inject": "codesys_injector_operation",
     "compare": "codesys_compare_operation",
-    "build": "codesys_build_operation"
+    "compare_ui": "codesys_compare_ui_operation",
+    "options": "codesys_options_operation",
+    "build": "codesys_build_operation",
+    "discover": "codesys_discover_operation",
+    "resources": "codesys_resources_operation"
 }
 
 OPTIONAL_MODULES = {
-    "compare": ["codesys_ui_diff"]
 }
 
 
@@ -68,6 +70,27 @@ def make_json_safe(value):
     return safe_text(value)
 
 
+def _normalize_params(params):
+    if params is None:
+        return {}
+    if isinstance(params, dict):
+        return params
+    try:
+        if isinstance(params, str):
+            text = params.strip()
+            if not text:
+                return {}
+            if (text.startswith("{") and text.endswith("}")) or (text.startswith("[") and text.endswith("]")):
+                import json
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    return parsed
+            return {"dump_root": text}
+    except Exception:
+        pass
+    return {"dump_root": safe_text(params)}
+
+
 def _get_root_dir(script_file=None):
     path = os.path.abspath(script_file or __file__)
     script_dir = os.path.dirname(path)
@@ -86,7 +109,9 @@ def _get_root_dir(script_file=None):
 
 def _ensure_sys_path(root_dir):
     runtime_dir = os.path.join(root_dir, ".runtime")
-    for path in (runtime_dir, root_dir):
+    engine_dir = os.path.join(root_dir, "cli", "external_engine")
+    old_engine_dir = os.path.join(root_dir, "src", "external_engine")
+    for path in (runtime_dir, engine_dir, old_engine_dir, root_dir):
         if path and path not in sys.path:
             sys.path.insert(0, path)
 
@@ -116,14 +141,6 @@ def load_hidden_module(name, script_file=None):
     _ensure_sys_path(root_dir)
     runtime_path = os.path.join(root_dir, ".runtime", name + ".pyw")
     root_path = os.path.join(root_dir, name + ".pyw")
-    return _load_python_module(name, runtime_path) or _load_python_module(name, root_path)
-
-
-def load_script_module(name, script_file=None):
-    root_dir = _get_root_dir(script_file)
-    _ensure_sys_path(root_dir)
-    runtime_path = os.path.join(root_dir, ".runtime", name + ".py")
-    root_path = os.path.join(root_dir, name + ".py")
     return _load_python_module(name, runtime_path) or _load_python_module(name, root_path)
 
 
@@ -249,6 +266,11 @@ class InteractiveUIAdapter(object):
             return self.ui_module.show_settings_dialog(current_settings, version)
         return None
 
+    def show_project_options_dialog(self, current_settings):
+        if self.ui_module and hasattr(self.ui_module, "show_project_options_dialog"):
+            return self.ui_module.show_project_options_dialog(current_settings)
+        return None
+
     def show_compare_dialog(self, different, new_in_ide, new_on_disk, unchanged_count, moved=None):
         if self.ui_module and hasattr(self.ui_module, "show_compare_dialog"):
             action, selected = self.ui_module.show_compare_dialog(
@@ -302,6 +324,10 @@ class HeadlessUIAdapter(object):
         print("[HEADLESS SETTINGS] returning current settings")
         return current_settings
 
+    def show_project_options_dialog(self, current_settings):
+        print("[HEADLESS PROJECT OPTIONS] returning current settings")
+        return current_settings
+
     def show_compare_dialog(self, different, new_in_ide, new_on_disk, unchanged_count, moved=None):
         action = safe_text(self.params.get("compare_action", "report")).lower() or "report"
         if action not in ("import", "export"):
@@ -315,6 +341,7 @@ class HeadlessUIAdapter(object):
 
 def resolve_runtime(runtime=None, caller_globals=None, params=None, headless=False,
                     system_obj=None, projects_obj=None):
+    params = _normalize_params(params)
     if runtime is not None:
         if params is not None:
             runtime.params = params
@@ -348,19 +375,57 @@ def resolve_runtime(runtime=None, caller_globals=None, params=None, headless=Fal
     )
 
 
-def create_headless_runtime(system_obj=None, projects_obj=None, params=None, caller_globals=None):
-    return resolve_runtime(
-        runtime=None,
-        caller_globals=caller_globals,
-        params=params,
-        headless=True,
-        system_obj=system_obj,
-        projects_obj=projects_obj
-    )
+def _ensure_bridge_path(root_dir):
+    bridge_dir = os.path.join(root_dir, "src", "ide_bridge")
+    if bridge_dir not in sys.path:
+        sys.path.insert(0, bridge_dir)
+    return bridge_dir
+
+
+def run_bridge_operation(params, runtime, caller_globals, operation_name, invoke_bridge, failure_message):
+    from codesys_utils import load_base_dir, init_logging, resolve_projects
+
+    params = params or {}
+    runtime = resolve_runtime(runtime, caller_globals=caller_globals, params=params)
+
+    base_dir, error = load_base_dir()
+    if error:
+        runtime.ui.warning(error)
+        return {"status": "error", "error": error}
+
+    init_logging(base_dir)
+    projects_obj = resolve_projects(runtime.projects, runtime.caller_globals)
+
+    if projects_obj is None or not projects_obj.primary:
+        message = "Error: 'projects' object not found or no project open."
+        runtime.ui.error(message)
+        return {"status": "error", "error": message}
+
+    _ensure_bridge_path(_get_root_dir())
+
+    try:
+        success = invoke_bridge(
+            runtime.system,
+            projects_obj.primary,
+            base_dir,
+            params.get("view_root"),
+            params.get("layout"),
+        )
+        if success:
+            return {"status": "success"}
+        runtime.ui.error(failure_message)
+        return {"status": "error"}
+    except Exception as error:
+        message = "Error invoking " + operation_name + " bridge: " + safe_text(error)
+        runtime.ui.error(message)
+        return {"status": "error", "error": safe_text(error)}
 
 
 def run_operation(command, params=None, runtime=None, caller_globals=None, script_file=None):
-    operation_module = load_operation_module(command, script_file=script_file, clear=True)
+    params = _normalize_params(params)
+    ensure_modules(CORE_MODULES, script_file=script_file, clear=True)
+
+    operation_module = load_operation_module(command, script_file=script_file, clear=False)
     if not operation_module:
         raise RuntimeError("Operation module not found for command: " + safe_text(command))
 
@@ -392,7 +457,7 @@ def run_operation(command, params=None, runtime=None, caller_globals=None, scrip
 def run_project_command(command, caller_globals=None, params=None, script_file=None):
     return run_operation(
         command,
-        params=params or {},
+        params=params,
         runtime=None,
         caller_globals=caller_globals,
         script_file=script_file

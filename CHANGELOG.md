@@ -4,6 +4,176 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+### Version 2.6.0 (2026-06-09)
+
+**CLI Contract:**
+
+- Added the short `cts` console alias alongside `cds-text-sync`.
+- Simplified the primary CLI surface around the main user workflows: `ping`, `status`, `export`, `compare`, `import`, `build`, PLC lifecycle commands, variable commands, project/object tools, `raw`, and `engine`.
+- Removed the separate `--manual` mode in favor of one short but explicit `cts --help` output.
+- Renamed CLI documentation from `cli/MANUAL.md` to `cli/CLI.md` and the CI/CD test-format document to `cli/TEST_FORMAT.md`.
+- Updated `cts --help` to document the operational model: folder, CODESYS IDE, and PLC are independent states; deployment moves data `folder -> IDE -> PLC`; folder-to-IDE import must be done while disconnected from the PLC.
+
+**Daemon & PLC State:**
+
+- `project-info` now returns CODESYS Project Information `summary` fields (`Company`, `Title`, `Version`, `Author`, `Description`, `DefaultNamespace`, `URL`) and all custom `properties`, including `cds-sync-folder`, `cds-daemon-config`, and `cds-sync-pc`.
+- `ping` and `status` now include cached PLC state: `connected`, `online`, `running`, `application_state`, active application name, and application path. These commands do not auto-connect to the PLC.
+- Fixed stale `online_app` cache handling so `connect -> plc-crc`, `device_status`, `start`, and `stop` work without first calling `app-state`.
+- Closing the daemon window with the `X` button now requests daemon shutdown instead of leaving the script operation running and blocking the CODESYS UI.
+
+**Import / Compare / Object Tools:**
+
+- `sync_import_text` now updates existing `.st` text objects through the CODESYS text API when native XML import does not apply the changed POU body.
+- `compare` now ignores XML serialization noise for externalized `.st`/`.csv` projections when the effective projection content matches the IDE content, including the `TextBlobForSerialisation` empty-container case.
+- Added daemon support for `read_object`; `cts read-object --name MAIN` returns declaration, implementation, and object path.
+- `update-pou` and `delete-pou` now default to the active CODESYS application instead of the previous hardcoded `CI_CD_Application`.
+
+**Cleanup:**
+
+- Removed legacy daemon/dead-code paths replaced by the reverse-pipe daemon flow.
+- Removed unused daemon imports left after the reverse-pipe simplification.
+
+**Release Verification:**
+
+- Verified on a live CODESYS daemon test bench with a clean project state (`36/36 unchanged`) and daemon permissions open (`deny: []`).
+- The daemon-driven `cts` workflow was exercised end to end across the main user-facing functions: `ping`, `status`, `permissions`, `raw`, `project-info`, `project-tree`, `export`, `compare`, `import`, `build`, `connect`, `disconnect`, `start`, `stop`, `app-state`, `plc-crc`, variable `read`/`write`, `variable-map`, `variable-snapshot`, `variable-restore`, `read-object`, `update-pou`, `delete-pou`, `read-log`, `sync`, `app_history`, `app_crc`, `app_info`, `create_boot_app`, `plc_upload`, JSON output, text output, and `--pretty`.
+
+**Fixes:**
+
+- Fixed creating `FUNCTION` POUs via `sync_import_text`: the return type is now parsed from the `FUNCTION name : <TYPE>` header and passed to the CODESYS `create_pou` API (handles `STRING(80)`, `ARRAY[..] OF X`, qualified user types, case-insensitive). Previously this crashed with `Specified argument was out of the range of valid values. Parameter name: return_type`. A clear error is raised if a FUNCTION has no return type.
+- `sync_import_text` no longer aborts the whole import on a projection conflict. Policy is now **disk wins, `.st` is canonical**: when an object's raw XML projection and its `.st` text were both edited on disk, the `.st` text wins (overlaid on the IDE baseline) and the import continues with a warning. Export-only CSV/XML projection edits with no importer are skipped with a warning instead of failing.
+- `sync_import_text` now fails early with a clear "disconnect first" error when the application has a live online session, instead of silently creating no objects. Override with `force_online`.
+- `update_pou` now reports `impl_ok: true` with an `impl_skipped` note for objects that have no implementation section (GVL/DUT/interface), instead of a misleading `impl_ok: false`.
+
+**CLI:**
+
+- Added the top-level `read-vars EXPR ... [--file F]` command for batch-reading multiple variables/expressions. It sends a proper JSON list to the daemon, avoiding the `rp read_variables --names` pitfall where every value is passed as a raw string (`'names' must be a list`).
+
+**Documentation:**
+
+- `cli/CLI.md` documents sync direction (IDE/disk), the difference between raw XML snapshot import and text edits, the disk-wins conflict policy, and that `update_pou` is for single-object edge cases.
+
+- Fixed UTF-8 handling in the IronPython reverse-pipe daemon for `.st` and JSON text reads, including `sync_compare_text` failing on IronPython 2.7 because builtin `open()` does not accept `encoding=`. Thanks to `kevin00156` for highlighting the bug.
+
+---
+
+### Version 2.5.1 (2026-05-28)
+
+**CLI & Daemon:**
+
+- Added the `cds-text-sync` CLI and reverse-pipe daemon workflow through `Project_daemon.py`.
+- Added concise dashboard output for `rp cicd`: file-level PASS/FAIL plus suite summary.
+- Changed the default CI/CD test folder from `test/` to `.test/`, with legacy `test/` fallback for existing projects.
+- CI/CD plans now require an explicit `application` field so tests cannot silently run against the wrong application.
+- Fixed `Project_options.py` runtime imports after moving the Python 3 engine to `cli/external_engine/`.
+- Updated the recommended `.gitignore` entries for `.dump/`, reports, logs, backups, and temporary diff files.
+
+**Installation & Documentation:**
+
+- IRM installer now validates that `python --version` works and reports Python 3 before installing the CLI.
+- IRM installer now offers to install the system CLI with `python -m pip install -e <install-path>`.
+- Documentation now states that copying files into CODESYS `ScriptDir` does not install the `cds-text-sync` shell command.
+- README and manuals refreshed for the CLI workflow, daemon demo, and test runner behavior.
+
+**Infrastructure & Quality:**
+
+- **GitHub Actions CI**: Added continuous integration workflow running tests on pushes and pull requests.
+- **Node 24 Update**: CI actions updated to target Node 24 runtime.
+- **Unit Test Tier**: Introduced structured unit test suite for external engine components.
+- **Test Fixtures**: Unignored fixtures directory to include test data in version control.
+
+**Security & Settings Window:**
+
+- WinForms Settings window (poll frequency slider + permissions checkboxes)
+- `rp permissions` — read-only config via CLI
+- Storage in `cds-daemon-config` project property (JSON)
+- Default deny list: reset_plc, create_boot_app, plc_upload, source_download
+- Only the Settings window (not CLI) can change permissions
+- Startup messages in dashboard (version + sync folder status)
+
+**Fixes:**
+
+- Stop Daemon no longer freezes CODESYS (Application.Exit, early loop break)
+- Settings/Stop buttons swapped for ergonomics
+- Sync folder warning on daemon start
+- `run_external_engine()` path fixed to `cli/external_engine/`
+
+**User Experience:**
+
+- **Reference Compare Preview**: Validation now shows a reference comparison before applying changes.
+
+**Documentation:**
+
+- **Zed Extension**: Mentioned the Zed Structured Text extension for users who prefer the Zed editor.
+
+### Version 2.0.1 (2026-05-11)
+
+**Ambiguous Textual Object Projections:**
+
+- **TypeGuid ST Pragmas**: Added `(* cds-text-sync: TypeGuid="{...}" *)` metadata pragmas for textual projections whose CODESYS object type cannot be reconstructed from ST syntax alone.
+- **Persistent Variables Projection**: Persistent variable lists can now be exported and edited as `.st` projections while the sync pragma is stripped before XML rehydration and IDE text updates.
+- **Profile-Driven GUID Policy**: Added `create_type_guids` and `ambiguous_text_type_guids` profile sections so special textual object handling is configured outside hardcoded syntax detection.
+- **Textual Create TypeGuid**: `CreateTextObject` patch entries can now carry an explicit `TypeGuid`, preferred by the IDE bridge before built-in fallback GUID candidates.
+- **Persistent Variables Safety Guard**: Creating a second Persistent Variables object in the same application is rejected before IDE apply because CODESYS supports only one such object per application.
+- **IDE Bridge Cleanup**: Removed noisy create fallback diagnostics and the native XML template create fallback; existing textual objects are updated through available text documents even when CODESYS does not expose reliable `has_textual_*` flags.
+- **Completion Summary Option**: Export and import now show a final success popup by default, with a project option to disable these completion summaries.
+
+### Version 2.0.0 (2026-04-29)
+
+**XML-First Synchronization Core:**
+
+- **Native XML Snapshot Contract**: Reworked the sync flow around a fresh CODESYS Native XML snapshot for every export, compare, and import operation.
+- **External Python 3 Engine**: Moved comparison, folder modeling, patch building, profile handling, and diagnostics out of the IDE bridge and into `src/external_engine/`.
+- **Thin CODESYS Bridge**: Reduced IDE-side scripts to snapshot export, external engine dispatch, targeted text API updates, and native XML patch application.
+- **Semantic XML Compare**: Added normalization for CODESYS serialization noise such as volatile timestamps, generated IDs, dictionary ordering, and whitespace.
+- **Mixed Patch Application**: Textual POUs are now applied through CODESYS text APIs before native XML patch import handles remaining non-textual objects, preserving child method/action/property bindings.
+
+**Public Script Set:**
+
+- **User-Facing Commands**: Stabilized the public root entrypoints as `Project_directory.py`, `Project_options.py`, `Project_export.py`, `Project_import.py`, `Project_compare.py`, and `Project_compare_ui.py`.
+- **Diagnostics Commands**: Added `Project_build.py`, `Project_discover.py`, and `Project_resources.py` for build checks, environment/type discovery, and snapshot resource analysis.
+- **Hidden Engine Helpers**: Kept patch builders, project models, and runtime internals behind the `Project_*.py` scripts and external engine CLI.
+- **Legacy Archive**: Preserved older scripts under `old_scripts/` for reference while making the new XML-first workflow the active path.
+
+**Project Layout & Settings:**
+
+- **Project Settings File**: Added tracked `cds-text-sync.json` support for layout, profile, and projection choices.
+- **View Root Modes**: Added support for legacy `.dump/views`, default `project-view/`, explicit `--view-root`, and experimental root-view mode.
+- **Generated State Separation**: Standardized generated folders around `.dump/`, `.backup/`, and `.diff/`, with stale managed files cleaned by manifest ownership.
+- **Options UI**: Reworked `Project_options.py` so users can choose layout, active CODESYS profile, and optional derived text projections from a dialog.
+- **Pre-Import Safety Backups**: Added optional timestamped `.project` backups before IDE-changing imports, stored only in `.backup/` with retention cleanup.
+
+**Optional Text Projections:**
+
+- **Readable POU `.st` Views**: Added opt-in `.st` projections for POU text with declaration first, `// --- implementation ---`, and implementation second.
+- **Flat Child POU Files**: Added `.st` projections for methods, actions, properties, and accessors as sibling files such as `ST_FB.ST_METHOD.st`.
+- **DUT `.st` Views**: Added declaration-only `.st` projections for DUT objects such as structures, enums, unions, and aliases.
+- **Standalone `.st` Creates**: Added controlled creation of new text objects from standalone `.st` files when the semantic kind can be detected.
+- **Text List CSV**: Added import-safe CSV projections for TextList objects, limited to editing existing rows and translations.
+- **Alarm Item CSV**: Added import-safe CSV projections for alarm items, limited to existing alarm row updates.
+- **No Duplicate PR Diffs**: When projections are enabled, export externalizes owned text into `.st` or `.csv` and redacts the duplicate text from the XML sidecar.
+- **Projection Conflict Detection**: Compare/import now fail explicitly when both canonical XML and its derived projection changed since the last export.
+
+**Compare & Review Workflow:**
+
+- **Interactive Compare UI**: Added checkbox review, object metadata, and disk-vs-IDE diff viewing through `Project_compare_ui.py`.
+- **Projection-First Diffs**: Compare UI prefers `.st` or `.csv` diffs when a projection owns the edited text, while keeping XML available for fallback cases.
+- **Selected Actions**: Added filtered import/export support by GUID so Compare UI can apply only checked objects.
+- **Large Project Stability**: Reduced compare report memory pressure and avoided flooding IDE output with repeated missing-resource messages.
+
+**Diagnostics & Large Project Support:**
+
+- **Build Diagnostics**: `Project_build.py` builds the active or selected application and writes `.dump/build_<Application>.log` plus `.dump/build_report.json`.
+- **Discover Diagnostics**: `Project_discover.py` records live IDE tree/type information into `.dump/discover_tree.log` and `.dump/discover_report.json`.
+- **Resource Diagnostics**: `Project_resources.py` analyzes snapshot object sizes and categories, writing `.dump/resources_report.json` and `.dump/resources_top.log`.
+- **Missing External Resource Skip**: Snapshot export skips missing image/file-like resources that can block CODESYS native export on large projects.
+
+**Known Limitations:**
+
+- Visualization objects can report native import success while specific visual property edits are not applied by CODESYS; this remains a targeted investigation area.
+- CSV projections are update-only in this release: inserted, removed, renamed, or duplicate rows fail explicitly.
+- Graphical CFC/FBD/LD implementations are intentionally excluded from `.st` projections unless a profile explicitly marks a safe textual representation.
+
 ### Version 1.7.5 (2026-04-17)
 
 **Profiles, Semantic Kinds & Sync Policy:**
@@ -246,7 +416,7 @@ All notable changes to this project will be documented in this file.
 - **Enhanced Property Support**: Properties with combined GET/SET accessors are now correctly handled. The export script now accurately combines both the `VAR` declaration and implementation code for each accessor into a single `.st` file.
 - **Bi-directional Accessor Sync**: The import script now correctly parses combined accessor content and updates both the declaration and implementation in CODESYS.
 - **Object Restoration**: Fixed an issue where objects deleted from CODESYS but remaining on disk would not be recreated. They are now automatically detected and restored during import.
-- **Bug Fix (#4)**: Resolved an issue where properties created manually in external editors (or by AI) were incorrectly identified or failed to import.
+- **Bug Fix (#4)**: Resolved an issue where properties created manually in external editors were incorrectly identified or failed to import.
 
 ### Version 1.5.1 (2026-02-15)
 

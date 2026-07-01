@@ -10,7 +10,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from _project_model import ProjectModel, ProjectNode
-from _project_profiles import kind_for_type_guid
+from _project_profiles import kind_for_type_guid, load_profile
 from xml_helpers import (
     IMPORT_SAFE_CSV_EXTRACTORS,
     ST_IMPLEMENTATION_MARKER,
@@ -93,6 +93,26 @@ class FolderReader:
         )
         self.manifest_path = os.path.join(dump_path, "manifest.json")
         self.profile = profile or {}
+
+    def _type_guid_for_kind(self, semantic_kind):
+        profile = self.profile or load_profile("default")
+        aliases = profile.get("guid_aliases") or {}
+        values = aliases.get(semantic_kind) or []
+        if not values:
+            return None
+        guid = str(values[0]).strip().strip("{}").lower()
+        return guid or None
+
+    def _resolve_parent_guid_by_name(self, model, parent_name):
+        target = str(parent_name or "").strip().lower()
+        if not target:
+            return None
+        for node in model.nodes.values():
+            if (node.name or "").strip().lower() != target:
+                continue
+            if model.is_collapsed_object(node):
+                return node.guid
+        return None
 
     def _normalize_fs_path(self, path):
         return os.path.normcase(os.path.abspath(os.path.normpath(path or "")))
@@ -304,10 +324,19 @@ class FolderReader:
                     parent_guid = (
                         sidecar_meta["ParentGuid"].strip().strip("{}").lower()
                     )
+                if not parent_guid and parent_name:
+                    parent_guid = self._resolve_parent_guid_by_name(
+                        model, parent_name
+                    )
                 if parent_guid and parent_guid in model.nodes:
                     parent_name = model.nodes[parent_guid].name or parent_name
+                if not type_guid and semantic_kind:
+                    type_guid = self._type_guid_for_kind(semantic_kind)
                 node = ProjectNode(
-                    guid, object_name, type_guid or semantic_kind, parent_guid
+                    guid,
+                    object_name,
+                    type_guid or semantic_kind,
+                    parent_guid,
                 )
                 node.code = content
                 node.display_path = (

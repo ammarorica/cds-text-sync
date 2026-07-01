@@ -158,6 +158,52 @@ class TestDiffEngineCollapsed:
         result = DiffEngine(ide, folder).compare()
         assert "c1" in result["modified"]
 
+    def test_pending_st_method_matches_existing_ide_method_when_adding_sibling(
+        self,
+    ):
+        """Adding a new .st-only method must not mark existing IDE methods deleted."""
+        profile = load_profile("default")
+        method_type = "f8a58466-d7f6-439f-bbb8-d4600e41d099"
+        parent = _make_node("p1", name="FB_RemoteController", node_type=COLLAPSED_TYPE)
+        parent.display_path = ["Device", "Application"]
+        existing_ide = _make_node(
+            "ide-existing",
+            name="ExistingMethod",
+            parent_guid="p1",
+            node_type=method_type,
+        )
+        existing_ide.display_path = ["Device", "Application", "FB_RemoteController"]
+        pending_existing = _make_node(
+            "create:existing",
+            name="ExistingMethod",
+            parent_guid="p1",
+            node_type=method_type,
+            projection_contents={
+                "FB_RemoteController.ExistingMethod.st": (
+                    "METHOD ExistingMethod\nEND_METHOD"
+                )
+            },
+        )
+        pending_new = _make_node(
+            "create:new",
+            name="NewMethod",
+            parent_guid="p1",
+            node_type=method_type,
+            projection_contents={
+                "FB_RemoteController.NewMethod.st": "METHOD NewMethod\nEND_METHOD"
+            },
+        )
+        pending_existing.metadata["pending_create"] = True
+        pending_new.metadata["pending_create"] = True
+
+        ide = model_with(parent, existing_ide)
+        folder = model_with(parent, pending_existing, pending_new)
+        result = DiffEngine(ide, folder, profile=profile).compare()
+
+        assert "ide-existing" not in result["deleted"]
+        assert "create:new" in result["added"]
+        assert "create:existing" not in result["added"]
+
 
 # ===================================================================
 # Projection metadata

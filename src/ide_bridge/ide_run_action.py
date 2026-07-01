@@ -142,7 +142,9 @@ def run_action(
         if not ide_backup.ensure_pre_import_backup(project, project_root, project_layout.backup_root, patch_path):
             ide_runtime_common.log_error("Pre-import backup failed. Import was not applied.")
             return False
-        apply_result = ide_apply_patch.apply_patch(system, project, patch_path)
+        apply_result = ide_apply_patch.apply_patch(
+            system, project, patch_path, view_root=views_path
+        )
         if not apply_result:
             if hasattr(apply_result, "summary"):
                 ide_runtime_common.log_error("Patch apply result: " + apply_result.summary())

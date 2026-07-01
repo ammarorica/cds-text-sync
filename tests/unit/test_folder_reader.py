@@ -337,6 +337,53 @@ class TestFolderReaderPendingStCreates:
         assert found[0].metadata["create_kind"] == "method"
         assert found[0].metadata.get("create_parent_name") == "Parent"
 
+    def test_pending_method_resolves_parent_guid_from_manifest_parent(self, tmp_path):
+        parent_guid = "d84038a4-1d83-4078-8d48-ee053e0cc844"
+        reader = self._setup_reader(tmp_path)
+        _write_manifest(
+            reader.dump_path,
+            {
+                "view_root": reader.views_path,
+                "ns": "",
+                "entries": [
+                    {
+                        "guid": parent_guid,
+                        "name": "FB_RemoteController",
+                        "type_guid": "6f9dac99-8de1-4efc-8465-68ac443b7d08",
+                        "parent_guid": None,
+                        "xml_path": "FB_RemoteController.xml",
+                        "hash": "abc",
+                    }
+                ],
+            },
+        )
+        _write_file(
+            reader.views_path,
+            "FB_RemoteController.xml",
+            "<Single Name='Object'><Single Name='MetaObject'>"
+            "<Single Name='Guid'>" + parent_guid + "</Single>"
+            "</Single></Single>",
+        )
+        _write_file(
+            reader.views_path,
+            "FB_RemoteController.ExistingMethod.st",
+            "METHOD ExistingMethod\nEND_METHOD",
+        )
+        _write_file(
+            reader.views_path,
+            "FB_RemoteController.NewMethod.st",
+            "METHOD NewMethod\nEND_METHOD",
+        )
+        model = reader.read()
+        pending = {
+            n.metadata.get("create_name"): n
+            for n in model.nodes.values()
+            if n.metadata.get("pending_create")
+        }
+        assert pending["ExistingMethod"].parent_guid == parent_guid
+        assert pending["NewMethod"].parent_guid == parent_guid
+        assert pending["ExistingMethod"].type == "f8a58466-d7f6-439f-bbb8-d4600e41d099"
+
     def test_discovers_method_with_unmanaged_sidecar_xml(self, tmp_path):
         reader = self._setup_reader(tmp_path)
         st_content = (

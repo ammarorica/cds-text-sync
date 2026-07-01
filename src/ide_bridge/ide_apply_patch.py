@@ -297,6 +297,74 @@ def _write_patch_without_text_creates(source_root):
     return filtered_path
 
 
+def _filter_native_patch_root(source_root, exclude_guids=None):
+    """Return a patch root suitable for import_native, minus text-only entries."""
+    exclude = set()
+    for guid in exclude_guids or []:
+        normalized = normalize_guid(guid)
+        if normalized:
+            exclude.add(normalized)
+
+    filtered_root = copy.deepcopy(source_root)
+    for child in list(filtered_root):
+        if _local_name(child.tag) in ("CreateTextObjects", "DeleteTextObjects"):
+            filtered_root.remove(child)
+
+    for structured_view in list(filtered_root):
+        if _local_name(structured_view.tag) != "StructuredView":
+            continue
+        entry_list = _named_descendant(structured_view, "EntryList")
+        if entry_list is None:
+            continue
+        kept = 0
+        for entry in list(entry_list):
+            if _entry_guid(entry) in exclude:
+                entry_list.remove(entry)
+            else:
+                kept += 1
+        if kept == 0:
+            filtered_root.remove(structured_view)
+
+    if len(list(filtered_root)) == 0:
+        return None
+    return filtered_root
+
+
+def apply_textual_patches_from_patch(project, patch_root, exclude_guids=None):
+    """Apply declaration/implementation updates via the text API.
+
+    Returns GUIDs handled textually so callers can omit them from import_native.
+    """
+    exclude = set()
+    for guid in exclude_guids or []:
+        normalized = normalize_guid(guid)
+        if normalized:
+            exclude.add(normalized)
+
+    guid_map = _build_guid_map(project)
+    patch_guids = _patch_object_guids(patch_root)
+    patch_texts = _patch_text_by_guid(patch_root)
+    patch_build_attrs = _patch_build_attrs_by_guid(patch_root)
+    handled = []
+
+    for guid in patch_guids:
+        if guid in exclude:
+            continue
+        obj = guid_map.get(guid)
+        texts = patch_texts.get(guid)
+        if obj is None or texts is None:
+            continue
+        if not _can_apply_textual_patch(obj, texts):
+            continue
+        text_updated = _apply_textual_patch(obj, texts)
+        attrs_updated = _apply_build_attrs_patch(
+            obj, patch_build_attrs.get(guid, {})
+        )
+        if text_updated or attrs_updated:
+            handled.append(guid)
+    return handled
+
+
 def _build_guid_map(project):
     guid_map = {}
     try:
@@ -894,7 +962,7 @@ def _apply_native_patches(project, guid_map, patch_root, native_guids, result):
                     pass
 
 
-def apply_patch(system, project, patch_path):
+def apply_patch(system, project, patch_path, view_root=None, compare_report_path=None):
     """
     Applies the pre-computed IMPORT.xml to the current project.
     """
@@ -914,6 +982,33 @@ def apply_patch(system, project, patch_path):
         text_deletes = patch_data["text_deletes"]
         guid_map = _build_guid_map(project)
         created_by_name = {}
+        exclude_native_guids = set()
+        family_updated_names = []
+
+        try:
+            import ide_collapsed_pou_import as _cpi
+        except Exception:
+            _cpi = None
+
+        if _cpi is not None and view_root:
+            families = _cpi.collect_affected_families(
+                project,
+                patch_root,
+                text_creates=text_creates,
+                compare_report_path=compare_report_path,
+            )
+            if families:
+                family_result = _cpi.apply_collapsed_families(
+                    project, view_root, families
+                )
+                exclude_native_guids.update(family_result.get("excluded_guids") or [])
+                family_updated_names = family_result.get("updated_names") or []
+                skipped_paths = family_result.get("skipped_create_paths") or set()
+                text_creates = [
+                    entry
+                    for entry in text_creates
+                    if entry.get("path") not in skipped_paths
+                ]
 
         delete_error = _apply_text_deletes(
             project, text_deletes, guid_map, result
@@ -923,12 +1018,16 @@ def apply_patch(system, project, patch_path):
         if text_deletes:
             guid_map = _build_guid_map(project)
 
-        existing_objects = [guid_map[guid] for guid in patch_guids if guid in guid_map]
+        existing_targets = [
+            guid
+            for guid in patch_guids
+            if guid in guid_map and guid not in exclude_native_guids
+        ]
+        existing_objects = [guid_map[guid] for guid in existing_targets]
 
         if existing_objects:
             textual_handled = []
-            for guid in patch_guids:
-                obj = guid_map.get(guid)
+            for guid in existing_targets:
                 texts = patch_texts.get(guid)
                 if obj is None or texts is None:
                     continue
@@ -963,6 +1062,8 @@ def apply_patch(system, project, patch_path):
 
             native_guids = []
             for guid in patch_guids:
+                if guid in exclude_native_guids:
+                    continue
                 if guid in guid_map and guid not in textual_handled:
                     native_guids.append(guid)
 
@@ -980,10 +1081,19 @@ def apply_patch(system, project, patch_path):
         if patch_guids:
             native_patch_path = None
             try:
-                native_patch_path = _write_patch_without_text_creates(patch_root)
-                project.import_native(native_patch_path)
-                for guid in patch_guids:
-                    result.add_applied(guid, "native")
+                filtered_root = _filter_native_patch_root(
+                    patch_root, exclude_guids=list(exclude_native_guids)
+                )
+                if filtered_root is not None:
+                    handle, native_patch_path = tempfile.mkstemp(suffix=".xml")
+                    os.close(handle)
+                    ET.ElementTree(filtered_root).write(
+                        native_patch_path, encoding="utf-8", xml_declaration=True
+                    )
+                    project.import_native(native_patch_path)
+                    for guid in patch_guids:
+                        if guid not in exclude_native_guids:
+                            result.add_applied(guid, "native")
             finally:
                 if native_patch_path and os.path.exists(native_patch_path):
                     try:

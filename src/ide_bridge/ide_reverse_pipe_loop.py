@@ -3396,25 +3396,68 @@ def _cmd_sync_import_text(params):
                             "source_path": st_path,
                         })
         
-        if text_creates:
-            _log("Creating {0} new text objects...".format(len(text_creates)))
-            created = {}
-            for entry in text_creates:
-                try:
-                    _apply_text_create_entry(project, entry, created)
-                except Exception as e:
-                    _log("Failed to create {0}: {1}".format(entry["name"], str(e)))
-            _log("Created text objects: {0}".format(", ".join(e["name"] for e in text_creates)))
+        import ide_apply_patch as _iap
+        import ide_collapsed_pou_import as _cpi
 
+        views_path = os.path.join(sync_folder, "project-view")
+        families = _cpi.collect_affected_families(
+            project,
+            root,
+            text_creates=text_creates,
+            compare_report_path=compare_report_path
+            if os.path.exists(compare_report_path)
+            else None,
+        )
+
+        exclude_native_guids = set()
         updated_text = []
-        if os.path.exists(compare_report_path):
-            updated_text = _apply_modified_st_objects(project, compare_report_path)
-            if updated_text:
-                _log("Updated text objects: {0}".format(", ".join(updated_text)))
-        
-        # Step 4: Apply StructuredView (MAIN update) — skip if fails, objects are already created
+        if families:
+            family_result = _cpi.apply_collapsed_families(
+                project, views_path, families, log_fn=_log
+            )
+            exclude_native_guids.update(family_result.get("excluded_guids") or [])
+            updated_text = list(family_result.get("updated_names") or [])
+            skipped_paths = family_result.get("skipped_create_paths") or set()
+            text_creates = [
+                entry
+                for entry in text_creates
+                if entry.get("path") not in skipped_paths
+            ]
+
+        text_handled_guids = _iap.apply_textual_patches_from_patch(
+            project, root, exclude_guids=list(exclude_native_guids)
+        )
+        if text_handled_guids:
+            _log(
+                "Applied textual patch for {0} object(s)".format(
+                    len(text_handled_guids)
+                )
+            )
+        for guid in text_handled_guids:
+            normalized = _common.normalize_guid(guid)
+            if normalized:
+                exclude_native_guids.add(normalized)
+
+        if families and updated_text:
+            _log("Updated text objects: {0}".format(", ".join(updated_text)))
+        elif os.path.exists(compare_report_path):
+            extra_names, extra_guids = _apply_modified_st_objects(
+                project, compare_report_path
+            )
+            if extra_names:
+                updated_text.extend(extra_names)
+                _log("Updated text objects: {0}".format(", ".join(extra_names)))
+            for guid in extra_guids:
+                normalized = _common.normalize_guid(guid)
+                if normalized:
+                    exclude_native_guids.add(normalized)
+
+        # Native import only for non-textual changes. Re-importing a collapsed POU
+        # after a text API body update drops its child methods/actions.
         try:
-            filtered_root = _strip_text_creates(root)
+            filtered_root = _iap._filter_native_patch_root(
+                root, exclude_guids=list(exclude_native_guids)
+            )
             if filtered_root is not None:
                 handle, filtered_path = tempfile.mkstemp(suffix=".xml")
                 os.close(handle)
@@ -3428,6 +3471,16 @@ def _cmd_sync_import_text(params):
         except Exception as e:
             import traceback
             _log("StructuredView import skipped: {0}\n{1}".format(e, traceback.format_exc()))
+
+        if text_creates:
+            _log("Creating {0} new text objects...".format(len(text_creates)))
+            created = {}
+            for entry in text_creates:
+                try:
+                    _apply_text_create_entry(project, entry, created)
+                except Exception as e:
+                    _log("Failed to create {0}: {1}".format(entry["name"], str(e)))
+            _log("Created text objects: {0}".format(", ".join(e["name"] for e in text_creates)))
         
         return {"ok": True, "data": {
             "path": patch_path,
@@ -3486,9 +3539,10 @@ def _apply_modified_st_objects(project, report_path):
         report = json.loads(_read_text_utf8(report_path))
     except Exception as e:
         _log("Could not read import compare report: {0}".format(e))
-        return []
+        return [], []
 
     updated = []
+    updated_guids = []
     for obj in ((report.get("objects") or {}).get("modified") or []):
         projection_diff = obj.get("projection_diff") or {}
         if str(projection_diff.get("format", "")).lower() != "st":
@@ -3508,11 +3562,14 @@ def _apply_modified_st_objects(project, report_path):
         decl_ok, impl_ok = _apply_text_to_object(target, decl, impl)
         if decl_ok and impl_ok:
             updated.append(obj.get("name") or obj.get("guid") or "?")
+            normalized = _common.normalize_guid(obj.get("guid", ""))
+            if normalized:
+                updated_guids.append(normalized)
         else:
             _log("Text update incomplete for {0}: decl={1}, impl={2}".format(
                 obj.get("name") or obj.get("guid"), decl_ok, impl_ok
             ))
-    return updated
+    return updated, updated_guids
 
 
 def _find_st_file(sync_folder, rel_path):

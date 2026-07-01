@@ -17,6 +17,7 @@ from xml_helpers import (
     entry_to_xml,
     externalized_text_xml,
     normalize_guid,
+    normalize_line_endings,
     sha1_hex,
     st_projection_content,
 )
@@ -477,6 +478,7 @@ class FolderWriter:
                 write_content = pragma_line + "\n" + content
             else:
                 write_content = content
+            write_content = normalize_line_endings(write_content)
             with codecs.open(full_path, "w", "utf-8") as f:
                 f.write(write_content)
             _log("Projection emitted: {0} -> {1}".format(node.name, projection_path))

@@ -21,6 +21,7 @@ from xml_helpers import (
     extract_bool_property,
     extract_cds_text_sync_type_guid,
     replace_text_blob_values,
+    normalize_line_endings,
     sha1_hex,
     split_st_projection_values,
     strip_cds_text_sync_pragmas,
@@ -203,6 +204,7 @@ class FolderReader:
                 continue
             with codecs.open(full_projection_path, "r", "utf-8") as f:
                 content = f.read()
+            content = normalize_line_endings(content)
             current_hash = sha1_hex(content)
             current_hashes[projection_path] = current_hash
             current_contents[projection_path] = content

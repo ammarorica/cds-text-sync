@@ -3429,10 +3429,23 @@ def _cmd_sync_import_text(params):
         updated_text = []
         disk_cleanup_entries = list(text_deletes)
         if families:
+            only_st_paths = None
+            if compare_report_path and os.path.exists(compare_report_path):
+                only_st_paths = _iap._modified_st_paths_from_compare_report(
+                    compare_report_path
+                )
             family_result = _cpi.apply_collapsed_families(
-                project, views_path, families, log_fn=_log
+                project,
+                views_path,
+                families,
+                log_fn=_log,
+                only_st_paths=only_st_paths or None,
             )
-            exclude_native_guids.update(family_result.get("excluded_guids") or [])
+            exclude_native_guids.update(
+                family_result.get("updated_guids")
+                or family_result.get("excluded_guids")
+                or []
+            )
             updated_text = list(family_result.get("updated_names") or [])
             skipped_paths = family_result.get("skipped_create_paths") or set()
             disk_cleanup_entries.extend(

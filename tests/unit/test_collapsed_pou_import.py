@@ -69,8 +69,38 @@ def test_apply_collapsed_families_updates_parent_and_child(tmp_path):
     result = apply_collapsed_families(project, views, ["FB_Main"])
     assert "x := 2;" in fb.textual_implementation.text
     assert "MethodA := TRUE;" in method.textual_implementation.text
-    assert fb.guid.lower() in result["excluded_guids"]
-    assert method.guid.lower() in result["excluded_guids"]
+    assert fb.guid.lower() in result["updated_guids"]
+    assert method.guid.lower() in result["updated_guids"]
+
+
+def test_apply_collapsed_families_leaves_failed_child_out_of_updated_guids(
+    tmp_path, monkeypatch
+):
+    views = str(tmp_path / "views")
+    os.makedirs(os.path.join(views, "Device", "Application"))
+    child_path = os.path.join(views, "Device", "Application", "FB_Main.MethodA.st")
+    with open(child_path, "w") as handle:
+        handle.write(
+            "METHOD MethodA : BOOL\nVAR\nEND_VAR\n\n"
+            "// --- implementation ---\n\n"
+            "MethodA := TRUE;\n"
+        )
+
+    project = FakeProject()
+    app = project._add_child(FakeObject(project, "Application", project))
+    fb = app._add_child(FakeObject(project, "FB_Main", app))
+    method = fb._add_child(FakeObject(project, "MethodA", fb))
+    method.textual_declaration.text = "METHOD MethodA : BOOL\nVAR\nEND_VAR"
+    method.textual_implementation.text = "MethodA := FALSE;"
+
+    monkeypatch.setattr(
+        "ide_collapsed_pou_import._iap._apply_textual_patch",
+        lambda _obj, _payload: False,
+    )
+
+    result = apply_collapsed_families(project, views, ["FB_Main"])
+    assert result["updated_guids"] == set()
+    assert result["updated_names"] == []
 
 
 def test_collect_affected_families_from_child_create():
@@ -88,6 +118,34 @@ def test_collect_affected_families_from_child_create():
     ]
     families = collect_affected_families(project, None, text_creates=creates)
     assert "FB_Main" in families
+
+
+def test_filter_family_entries_limits_to_changed_paths(tmp_path):
+    views = str(tmp_path / "views")
+    os.makedirs(os.path.join(views, "Device", "Application"))
+    parent_path = os.path.join(views, "Device", "Application", "FB_Main.st")
+    method_path = os.path.join(views, "Device", "Application", "FB_Main.MethodA.st")
+    accessor_path = os.path.join(
+        views, "Device", "Application", "FB_Main.ActuatorsCommandRequested.Get.st"
+    )
+    for path, body in (
+        (parent_path, "FUNCTION_BLOCK FB_Main\nVAR\nEND_VAR\n"),
+        (method_path, "METHOD MethodA\nEND_METHOD\n"),
+        (accessor_path, "METHOD Get\nEND_METHOD\n"),
+    ):
+        with open(path, "w") as handle:
+            handle.write(body)
+
+    entries = iter_family_st_files(views, "FB_Main")
+    from ide_collapsed_pou_import import _filter_family_entries
+
+    filtered = _filter_family_entries(
+        entries,
+        ["Device/Application/FB_Main.MethodA.st"],
+    )
+    assert [entry["path"] for entry in filtered] == [
+        "Device/Application/FB_Main.MethodA.st"
+    ]
 
 
 def test_families_from_disk_view_gaps_detects_missing_xml_and_st(tmp_path):

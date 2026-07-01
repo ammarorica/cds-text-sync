@@ -828,9 +828,17 @@ def csv_projection_content(entry_element, extractor_name):
     return extractor(entry_element)
 
 
+def normalize_line_endings(value):
+    if value is None:
+        return None
+    return str(value).replace("\r\n", "\n").replace("\r", "\n")
+
+
 def sha1_hex(value):
     if value is None:
         return None
+    if hasattr(value, "encode"):
+        value = normalize_line_endings(value)
     data = value.encode("utf-8") if hasattr(value, "encode") else value
     return hashlib.sha1(data).hexdigest()
 

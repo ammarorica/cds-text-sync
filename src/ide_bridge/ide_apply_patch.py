@@ -16,6 +16,12 @@ import xml.etree.ElementTree as ET
 from ide_runtime_common import normalize_guid, object_name
 
 
+def _normalize_line_endings(value):
+    if value is None:
+        return None
+    return str(value).replace("\r\n", "\n").replace("\r", "\n")
+
+
 class ApplyPatchResult(object):
     def __init__(self):
         self.success = True
@@ -135,12 +141,30 @@ def _local_name(tag):
     return tag
 
 
+def _text_lines_value(text_lines_elem):
+    if text_lines_elem is None:
+        return None
+    lines = []
+    for line_elem in _children(text_lines_elem):
+        text_elem = _named_child(line_elem, "Text")
+        if text_elem is not None:
+            lines.append(text_elem.text or "")
+    if not lines:
+        return None
+    return "\n".join(lines)
+
+
 def _text_blob(section):
     if section is None:
         return None
     blob = _named_descendant(section, "TextBlobForSerialisation")
     if blob is not None:
         return blob.text or ""
+    text_lines = _named_descendant(section, "TextLines")
+    if text_lines is not None:
+        value = _text_lines_value(text_lines)
+        if value is not None:
+            return value
     return None
 
 
@@ -935,13 +959,135 @@ def _apply_text_deletes(project, text_deletes, guid_map, result):
 
 
 def _replace_text_document(doc, value):
-    if doc.text == value:
+    if doc is None:
+        return False
+    value = _normalize_line_endings(value or "")
+    try:
+        current = _normalize_line_endings(getattr(doc, "text", None) or "")
+    except Exception:
+        current = ""
+    if current == value:
         return False
     try:
         doc.text = value
     except Exception:
-        doc.replace(value)
-    return True
+        try:
+            doc.replace(value)
+        except Exception:
+            return False
+    try:
+        return _normalize_line_endings(getattr(doc, "text", None) or "") == value
+    except Exception:
+        return True
+
+
+def _patch_has_text_lines(root):
+    for elem in root.iter():
+        if elem.attrib.get("Name") == "TextLines":
+            return True
+    return False
+
+
+def _compare_report_by_guid(report_path):
+    try:
+        with open(report_path, "r") as handle:
+            report = json.load(handle)
+    except Exception:
+        return {}
+    index = {}
+    objects = report.get("objects") or {}
+    for category in ("modified", "added"):
+        for obj in objects.get(category) or []:
+            guid = normalize_guid(obj.get("guid", ""))
+            if guid:
+                index[guid] = obj
+    return index
+
+
+def _st_projection_path_from_report_obj(obj):
+    if not obj:
+        return ""
+    paths = obj.get("projection_changed_paths") or []
+    if paths:
+        return str(paths[0]).replace("\\", "/")
+    projection_diff = obj.get("projection_diff") or {}
+    return str(projection_diff.get("path") or "").replace("\\", "/")
+
+
+def _apply_st_content_to_object(obj, content, log_fn=None):
+    log = log_fn or print
+    decl, impl = _split_st_update_content(_normalize_line_endings(content))
+    payload = {"declaration": decl or None, "implementation": impl or None}
+    if not _can_apply_textual_patch(obj, payload):
+        log(
+            "Object has no text API for: {0}".format(
+                object_name(obj) or getattr(obj, "guid", "")
+            )
+        )
+        return False
+    updated = _apply_textual_patch(obj, payload)
+    if not updated:
+        log(
+            "Text API apply made no change for: {0}".format(
+                object_name(obj) or getattr(obj, "guid", "")
+            )
+        )
+    return updated
+
+
+def _apply_st_from_view_disk(
+    project, view_root, st_rel_path, guid, guid_map, log_fn=None
+):
+    log = log_fn or print
+    if not view_root or not st_rel_path:
+        return False
+    full_path = os.path.join(view_root, st_rel_path.replace("/", os.sep))
+    if not os.path.isfile(full_path):
+        log("Missing .st on disk: " + str(st_rel_path))
+        return False
+    try:
+        with open(full_path, "r") as handle:
+            content = handle.read()
+    except Exception as error:
+        log("Could not read {0}: {1}".format(st_rel_path, error))
+        return False
+    obj = guid_map.get(normalize_guid(guid))
+    if obj is None:
+        log("GUID not found in project: " + str(guid))
+        return False
+    if _apply_st_content_to_object(obj, content, log_fn=log):
+        log(
+            "Applied .st from disk for {0}".format(
+                object_name(obj) or st_rel_path
+            )
+        )
+        return True
+    return False
+
+
+def _apply_disk_st_for_guids(
+    project, view_root, guids, compare_report_path, guid_map, log_fn=None
+):
+    log = log_fn or print
+    report_index = (
+        _compare_report_by_guid(compare_report_path)
+        if compare_report_path and os.path.exists(compare_report_path)
+        else {}
+    )
+    applied = []
+    for guid in guids or []:
+        normalized = normalize_guid(guid)
+        if not normalized:
+            continue
+        report_obj = report_index.get(normalized) or {}
+        st_path = _st_projection_path_from_report_obj(report_obj)
+        if not st_path:
+            continue
+        if _apply_st_from_view_disk(
+            project, view_root, st_path, normalized, guid_map, log_fn=log
+        ):
+            applied.append(normalized)
+    return applied
 
 
 def _text_document(obj, attr_name, flag_name):
@@ -1005,6 +1151,78 @@ def _apply_build_attrs_patch(obj, attrs):
     return updated
 
 
+def _split_st_update_content(content):
+    marker = "// --- implementation ---"
+    normalized = (content or "").replace("\r\n", "\n").replace("\r", "\n")
+    if marker in normalized:
+        parts = normalized.split(marker, 1)
+        return parts[0].strip(), parts[1].strip()
+    return normalized.strip(), ""
+
+
+def _apply_modified_st_from_compare_report(
+    project, report_path, exclude_guids=None, log_fn=None
+):
+    log = log_fn or print
+    try:
+        with open(report_path, "r") as handle:
+            report = json.load(handle)
+    except Exception as error:
+        log("Could not read compare report: {0}".format(error))
+        return [], []
+
+    exclude = set()
+    for guid in exclude_guids or []:
+        normalized = normalize_guid(guid)
+        if normalized:
+            exclude.add(normalized)
+
+    guid_map = _build_guid_map(project)
+    updated_names = []
+    updated_guids = []
+    for obj in ((report.get("objects") or {}).get("modified") or []):
+        projection_diff = obj.get("projection_diff") or {}
+        if str(projection_diff.get("format", "")).lower() != "st":
+            continue
+        disk_content = projection_diff.get("disk_content")
+        if not disk_content:
+            continue
+        guid = normalize_guid(obj.get("guid", ""))
+        if guid in exclude:
+            continue
+        target = guid_map.get(guid)
+        if target is None:
+            log(
+                "Could not find modified text object: {0}".format(
+                    obj.get("name") or obj.get("guid")
+                )
+            )
+            continue
+        decl, impl = _split_st_update_content(disk_content)
+        payload = {
+            "declaration": decl or None,
+            "implementation": impl or None,
+        }
+        if not _can_apply_textual_patch(target, payload):
+            log(
+                "Text object not patchable via text API: {0}".format(
+                    obj.get("name") or guid
+                )
+            )
+            continue
+        if _apply_textual_patch(target, payload):
+            updated_names.append(obj.get("name") or guid or "?")
+            if guid:
+                updated_guids.append(guid)
+        else:
+            log(
+                "Text update did not apply for {0}".format(
+                    obj.get("name") or guid
+                )
+            )
+    return updated_names, updated_guids
+
+
 def _can_apply_textual_patch(obj, texts):
     declaration = texts.get("declaration")
     implementation = texts.get("implementation")
@@ -1059,14 +1277,32 @@ def _apply_native_patches(project, guid_map, patch_root, native_guids, result):
                     pass
 
 
-def apply_patch(system, project, patch_path, view_root=None, compare_report_path=None):
+def _modified_st_paths_from_compare_report(report_path):
+    try:
+        with open(report_path, "r") as handle:
+            report = json.load(handle)
+    except Exception:
+        return set()
+    paths = set()
+    for obj in ((report.get("objects") or {}).get("modified") or []):
+        for path in obj.get("projection_changed_paths") or []:
+            paths.add(str(path).replace("\\", "/"))
+        projection_diff = obj.get("projection_diff") or {}
+        path = projection_diff.get("path")
+        if path:
+            paths.add(str(path).replace("\\", "/"))
+    return paths
+
+
+def apply_patch(system, project, patch_path, view_root=None, compare_report_path=None, log_fn=None):
     """
     Applies the pre-computed IMPORT.xml to the current project.
     """
+    log = log_fn or print
     result = ApplyPatchResult()
-    print("Applying patch from: " + patch_path)
+    log("Applying patch from: " + patch_path)
     if not os.path.exists(patch_path):
-        print("Patch file not found.")
+        log("Patch file not found.")
         return result.fail("Patch file not found.")
 
     try:
@@ -1093,12 +1329,26 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
                 patch_root,
                 text_creates=text_creates,
                 compare_report_path=compare_report_path,
+                view_root=view_root,
             )
             if families:
+                only_st_paths = None
+                if compare_report_path and os.path.exists(compare_report_path):
+                    only_st_paths = _modified_st_paths_from_compare_report(
+                        compare_report_path
+                    )
                 family_result = _cpi.apply_collapsed_families(
-                    project, view_root, families
+                    project,
+                    view_root,
+                    families,
+                    log_fn=log,
+                    only_st_paths=only_st_paths or None,
                 )
-                exclude_native_guids.update(family_result.get("excluded_guids") or [])
+                exclude_native_guids.update(
+                    family_result.get("updated_guids")
+                    or family_result.get("excluded_guids")
+                    or []
+                )
                 family_updated_names = family_result.get("updated_names") or []
                 skipped_paths = family_result.get("skipped_create_paths") or set()
                 text_creates = [
@@ -1121,6 +1371,25 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
                 cleanup_deleted_view_files(view_root, manifest_path, text_deletes)
 
         def _finish():
+            if (
+                compare_report_path
+                and os.path.exists(compare_report_path)
+                and result.success
+            ):
+                report_names, report_guids = _apply_modified_st_from_compare_report(
+                    project,
+                    compare_report_path,
+                    exclude_guids=result.applied_guids,
+                    log_fn=log,
+                )
+                for guid in report_guids:
+                    result.add_applied(guid, "textual")
+                if report_names:
+                    log(
+                        "Applied compare-report text updates: {0}".format(
+                            ", ".join(report_names)
+                        )
+                    )
             if view_root and result.success:
                 try:
                     import ide_view_sync as _ivs
@@ -1134,10 +1403,10 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
                         project_root,
                         view_root,
                         manifest_path,
-                        log_fn=print,
+                        log_fn=log,
                     )
                 except Exception as error:
-                    print(
+                    log(
                         "Warning: post-import view sync failed: {0}".format(error)
                     )
             return result
@@ -1164,16 +1433,16 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
                         obj, patch_build_attrs.get(guid, {})
                     )
                 except Exception as error:
-                    print(
+                    log(
                         "Error applying textual patch for object {0}: {1}".format(
                             guid, error
                         )
                     )
                     return result.fail(error, guid)
                 if text_updated or attrs_updated:
-                    print("Applied textual patch for object: " + str(guid))
+                    log("Applied textual patch for object: " + str(guid))
                 else:
-                    print("Textual patch already current for object: " + str(guid))
+                    log("Textual patch already current for object: " + str(guid))
                 textual_handled.append(guid)
                 result.add_applied(guid, "textual")
 
@@ -1192,9 +1461,34 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
                 if guid in guid_map and guid not in textual_handled:
                     native_guids.append(guid)
 
-            if native_guids:
+            if native_guids and view_root:
+                disk_applied = _apply_disk_st_for_guids(
+                    project,
+                    view_root,
+                    native_guids,
+                    compare_report_path,
+                    guid_map,
+                    log_fn=log,
+                )
+                for guid in disk_applied:
+                    result.add_applied(guid, "textual")
+                    if guid not in textual_handled:
+                        textual_handled.append(guid)
+                native_guids = [
+                    guid
+                    for guid in native_guids
+                    if normalize_guid(guid) not in disk_applied
+                ]
+
+            if native_guids and not _patch_has_text_lines(patch_root):
                 _apply_native_patches(
                     project, guid_map, patch_root, native_guids, result
+                )
+            elif native_guids:
+                log(
+                    "Skipped native import for TextLines patch; unapplied: {0}".format(
+                        ", ".join(native_guids)
+                    )
                 )
             create_error = _apply_text_creates(
                 project, text_creates, created_by_name, result
@@ -1204,21 +1498,49 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
             return _finish()
 
         if patch_guids:
+            pending_guids = [
+                guid
+                for guid in patch_guids
+                if guid not in exclude_native_guids
+                and normalize_guid(guid) not in result.applied_guids
+            ]
+            if pending_guids and view_root:
+                disk_applied = _apply_disk_st_for_guids(
+                    project,
+                    view_root,
+                    pending_guids,
+                    compare_report_path,
+                    guid_map,
+                    log_fn=log,
+                )
+                for guid in disk_applied:
+                    result.add_applied(guid, "textual")
+                pending_guids = [
+                    guid
+                    for guid in pending_guids
+                    if normalize_guid(guid) not in disk_applied
+                ]
             native_patch_path = None
             try:
-                filtered_root = _filter_native_patch_root(
-                    patch_root, exclude_guids=list(exclude_native_guids)
-                )
-                if filtered_root is not None:
-                    handle, native_patch_path = tempfile.mkstemp(suffix=".xml")
-                    os.close(handle)
-                    ET.ElementTree(filtered_root).write(
-                        native_patch_path, encoding="utf-8", xml_declaration=True
+                if pending_guids and not _patch_has_text_lines(patch_root):
+                    filtered_root = _filter_native_patch_root(
+                        patch_root, exclude_guids=list(exclude_native_guids)
                     )
-                    project.import_native(native_patch_path)
-                    for guid in patch_guids:
-                        if guid not in exclude_native_guids:
+                    if filtered_root is not None:
+                        handle, native_patch_path = tempfile.mkstemp(suffix=".xml")
+                        os.close(handle)
+                        ET.ElementTree(filtered_root).write(
+                            native_patch_path, encoding="utf-8", xml_declaration=True
+                        )
+                        project.import_native(native_patch_path)
+                        for guid in pending_guids:
                             result.add_applied(guid, "native")
+                elif pending_guids:
+                    log(
+                        "Skipped native import for TextLines-only patch: {0}".format(
+                            ", ".join(pending_guids)
+                        )
+                    )
             finally:
                 if native_patch_path and os.path.exists(native_patch_path):
                     try:
@@ -1233,5 +1555,5 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
 
         return _finish()
     except Exception as e:
-        print("Error applying patch: " + str(e))
+        log("Error applying patch: " + str(e))
         return result.fail(e)

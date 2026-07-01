@@ -142,8 +142,29 @@ def run_action(
         if not ide_backup.ensure_pre_import_backup(project, project_root, project_layout.backup_root, patch_path):
             ide_runtime_common.log_error("Pre-import backup failed. Import was not applied.")
             return False
+        compare_report_path = os.path.join(dump_root, "compare_report.json")
+        compare_args = [
+            "compare",
+            "--project-root",
+            project_root,
+            "--snapshot",
+            ide_xml_path,
+            "--report",
+            compare_report_path,
+            "--include-objects",
+        ]
+        ide_runtime_common.run_external_engine(
+            compare_args, project_root=project_root, dump_root=dump_root
+        )
         apply_result = ide_apply_patch.apply_patch(
-            system, project, patch_path, view_root=views_path
+            system,
+            project,
+            patch_path,
+            view_root=views_path,
+            compare_report_path=compare_report_path
+            if os.path.exists(compare_report_path)
+            else None,
+            log_fn=detailed_log,
         )
         if not apply_result:
             if hasattr(apply_result, "summary"):

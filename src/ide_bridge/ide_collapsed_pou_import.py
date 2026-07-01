@@ -274,9 +274,26 @@ def _find_parent_object(project, parent_name):
     return None
 
 
-def apply_collapsed_families(project, view_root, family_names, log_fn=None):
+def _normalize_st_paths(paths):
+    return {
+        str(path).replace("\\", "/")
+        for path in (paths or [])
+        if path
+    }
+
+
+def _filter_family_entries(entries, only_st_paths):
+    allowed = _normalize_st_paths(only_st_paths)
+    if not allowed:
+        return entries
+    return [entry for entry in entries if entry.get("path") in allowed]
+
+
+def apply_collapsed_families(
+    project, view_root, family_names, log_fn=None, only_st_paths=None
+):
     log = log_fn or print
-    excluded_guids = set()
+    updated_guids = set()
     updated_names = []
     skipped_create_paths = set()
     disk_cleanup_entries = []
@@ -287,10 +304,13 @@ def apply_collapsed_families(project, view_root, family_names, log_fn=None):
             log("Collapsed POU family skipped, parent not found: " + str(parent_name))
             continue
 
-        excluded_guids.update(_collect_object_guids(parent_obj))
         entries = iter_family_st_files(view_root, parent_name)
+        entries = _filter_family_entries(entries, only_st_paths)
         if not entries:
-            log("Collapsed POU family has no .st files on disk: " + str(parent_name))
+            log(
+                "Collapsed POU family has no matching .st files on disk: "
+                + str(parent_name)
+            )
             continue
 
         created_by_name = {parent_name.lower(): parent_obj}
@@ -318,6 +338,9 @@ def apply_collapsed_families(project, view_root, family_names, log_fn=None):
             if entry.get("is_parent"):
                 if _iap._apply_textual_patch(parent_obj, payload):
                     updated_names.append(entry["name"])
+                    normalized = normalize_guid(getattr(parent_obj, "guid", ""))
+                    if normalized:
+                        updated_guids.add(normalized)
                 continue
 
             if container is None:
@@ -335,9 +358,26 @@ def apply_collapsed_families(project, view_root, family_names, log_fn=None):
                 target_parent = parent_obj
             child = _iap._find_child_transparent(target_parent, entry["name"])
             if child is None:
-                child = _iap._create_text_object(
-                    target_parent, payload, container_chain=container_chain
-                )
+                if entry.get("kind") == "property_accessor":
+                    log(
+                        "Collapsed POU property accessor not in IDE, skipped: {0}.{1}.{2}".format(
+                            parent_name,
+                            entry.get("parent_name") or "",
+                            entry["name"],
+                        )
+                    )
+                    continue
+                try:
+                    child = _iap._create_text_object(
+                        target_parent, payload, container_chain=container_chain
+                    )
+                except Exception as error:
+                    log(
+                        "Collapsed POU child create failed: {0}.{1}: {2}".format(
+                            parent_name, entry["name"], error
+                        )
+                    )
+                    continue
             if child is None:
                 log(
                     "Collapsed POU child not applied: {0}.{1}".format(
@@ -347,6 +387,9 @@ def apply_collapsed_families(project, view_root, family_names, log_fn=None):
                 continue
             if _iap._apply_textual_patch(child, payload):
                 updated_names.append(entry["name"])
+                normalized = normalize_guid(getattr(child, "guid", ""))
+                if normalized:
+                    updated_guids.add(normalized)
             created_by_name[object_name(child).lower()] = child
 
         disk_child_names = {
@@ -355,7 +398,9 @@ def apply_collapsed_families(project, view_root, family_names, log_fn=None):
             if not entry.get("is_parent")
         }
         sample_dir = os.path.dirname(entries[0]["path"]).replace("\\", "/")
-        if hasattr(parent_obj, "create_method"):
+        if hasattr(parent_obj, "create_method") and not _normalize_st_paths(
+            only_st_paths
+        ):
             for child in list(_iap._children_of(parent_obj)):
                 child_name = object_name(child)
                 if not child_name or child_name.lower() in disk_child_names:
@@ -385,7 +430,6 @@ def apply_collapsed_families(project, view_root, family_names, log_fn=None):
                     }
                 )
 
-        excluded_guids.update(_collect_object_guids(parent_obj))
         log(
             "Collapsed POU family imported as text: {0} ({1} file(s))".format(
                 parent_name, len(entries)
@@ -393,7 +437,8 @@ def apply_collapsed_families(project, view_root, family_names, log_fn=None):
         )
 
     return {
-        "excluded_guids": excluded_guids,
+        "excluded_guids": updated_guids,
+        "updated_guids": updated_guids,
         "updated_names": updated_names,
         "skipped_create_paths": skipped_create_paths,
         "disk_cleanup_entries": disk_cleanup_entries,

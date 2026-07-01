@@ -18,6 +18,7 @@ from xml_helpers import (
     join_text_blob_values,
     normalize_guid,
     normalized_xml_text,
+    normalize_line_endings,
     sha1_hex,
     split_st_projection_values,
     split_text_projection,
@@ -64,6 +65,14 @@ class TestSha1Hex:
 
     def test_deterministic(self):
         assert sha1_hex("test") == sha1_hex("test")
+
+    def test_crlf_and_lf_produce_same_digest(self):
+        assert sha1_hex("a\nb") == sha1_hex("a\r\nb")
+
+
+class TestNormalizeLineEndings:
+    def test_normalizes_crlf(self):
+        assert normalize_line_endings("a\r\nb") == "a\nb"
 
 
 # ===================================================================

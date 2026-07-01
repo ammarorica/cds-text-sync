@@ -7,6 +7,7 @@ Must be compatible with IronPython 2.7.
 from __future__ import print_function
 
 import copy
+import json
 import os
 import re
 import tempfile
@@ -209,6 +210,102 @@ def _text_delete_entries(root):
             }
         )
     return result
+
+
+def _related_view_paths(rel_path):
+    normalized = str(rel_path or "").replace("\\", "/").strip()
+    if not normalized:
+        return []
+    base, ext = os.path.splitext(normalized)
+    ext = ext.lower()
+    paths = [normalized]
+    if ext == ".st":
+        paths.append(base + ".xml")
+    elif ext == ".xml":
+        paths.append(base + ".st")
+    return paths
+
+
+def cleanup_deleted_view_files(view_root, manifest_path, delete_entries):
+    """Remove deleted object view files from disk and prune manifest entries."""
+    if not view_root or not delete_entries:
+        return []
+
+    removed = []
+    guids_removed = set()
+    for entry in delete_entries:
+        guid = normalize_guid(entry.get("guid"))
+        if guid:
+            guids_removed.add(guid)
+        for rel_path in _related_view_paths(entry.get("path")):
+            full_path = os.path.join(view_root, rel_path.replace("/", os.sep))
+            if os.path.isfile(full_path):
+                try:
+                    os.remove(full_path)
+                    removed.append(rel_path)
+                except Exception as error:
+                    print(
+                        "Warning: could not remove deleted view file {0}: {1}".format(
+                            rel_path, error
+                        )
+                    )
+
+    if not manifest_path or not os.path.isfile(manifest_path):
+        return removed
+    if not guids_removed and not removed:
+        return removed
+
+    removed_paths = set(str(path).replace("\\", "/") for path in removed)
+
+    try:
+        with open(manifest_path, "r") as handle:
+            manifest = json.load(handle)
+    except Exception:
+        return removed
+
+    kept = []
+    for entry in manifest.get("entries", []) or []:
+        entry_guid = normalize_guid(entry.get("guid"))
+        entry_paths = set()
+        for rel_path in _related_view_paths(entry.get("xml_path")):
+            entry_paths.add(str(rel_path).replace("\\", "/"))
+        for rel_path in entry.get("projection_paths") or []:
+            entry_paths.add(str(rel_path).replace("\\", "/"))
+        drop_entry = entry_guid in guids_removed or bool(
+            entry_paths.intersection(removed_paths)
+        )
+        if drop_entry:
+            for rel_path in _related_view_paths(entry.get("xml_path")):
+                full_path = os.path.join(view_root, rel_path.replace("/", os.sep))
+                if os.path.isfile(full_path):
+                    try:
+                        os.remove(full_path)
+                        if rel_path not in removed:
+                            removed.append(rel_path)
+                    except Exception:
+                        pass
+            for rel_path in entry.get("projection_paths") or []:
+                full_path = os.path.join(
+                    view_root, str(rel_path).replace("/", os.sep)
+                )
+                if os.path.isfile(full_path):
+                    try:
+                        os.remove(full_path)
+                        rel_text = str(rel_path).replace("\\", "/")
+                        if rel_text not in removed:
+                            removed.append(rel_text)
+                    except Exception:
+                        pass
+            continue
+        kept.append(entry)
+
+    manifest["entries"] = kept
+    try:
+        with open(manifest_path, "w") as handle:
+            json.dump(manifest, handle, indent=2)
+    except Exception as error:
+        print("Warning: could not update manifest after delete: {0}".format(error))
+    return removed
 
 
 def _bool_text(value):
@@ -1017,6 +1114,33 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
             return delete_error
         if text_deletes:
             guid_map = _build_guid_map(project)
+            if view_root:
+                manifest_path = os.path.join(
+                    os.path.dirname(patch_path), "manifest.json"
+                )
+                cleanup_deleted_view_files(view_root, manifest_path, text_deletes)
+
+        def _finish():
+            if view_root and result.success:
+                try:
+                    import ide_view_sync as _ivs
+
+                    project_root = os.path.abspath(os.path.join(view_root, os.pardir))
+                    manifest_path = os.path.join(
+                        os.path.dirname(patch_path), "manifest.json"
+                    )
+                    _ivs.sync_view_after_import(
+                        project,
+                        project_root,
+                        view_root,
+                        manifest_path,
+                        log_fn=print,
+                    )
+                except Exception as error:
+                    print(
+                        "Warning: post-import view sync failed: {0}".format(error)
+                    )
+            return result
 
         existing_targets = [
             guid
@@ -1028,6 +1152,7 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
         if existing_objects:
             textual_handled = []
             for guid in existing_targets:
+                obj = guid_map.get(guid)
                 texts = patch_texts.get(guid)
                 if obj is None or texts is None:
                     continue
@@ -1058,7 +1183,7 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
                 )
                 if create_error is not None:
                     return create_error
-                return result
+                return _finish()
 
             native_guids = []
             for guid in patch_guids:
@@ -1076,7 +1201,7 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
             )
             if create_error is not None:
                 return create_error
-            return result
+            return _finish()
 
         if patch_guids:
             native_patch_path = None
@@ -1105,7 +1230,8 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
         )
         if create_error is not None:
             return create_error
-        return result
+
+        return _finish()
     except Exception as e:
         print("Error applying patch: " + str(e))
         return result.fail(e)

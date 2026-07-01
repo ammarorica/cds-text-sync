@@ -88,3 +88,19 @@ def test_collect_affected_families_from_child_create():
     ]
     families = collect_affected_families(project, None, text_creates=creates)
     assert "FB_Main" in families
+
+
+def test_families_from_disk_view_gaps_detects_missing_xml_and_st(tmp_path):
+    views = str(tmp_path / "views")
+    os.makedirs(os.path.join(views, "Device", "Application"))
+    st_only = os.path.join(views, "Device", "Application", "FB_Main.NewMethod.st")
+    xml_only = os.path.join(views, "Device", "Application", "FB_Main.OldMethod.xml")
+    with open(st_only, "w") as handle:
+        handle.write("METHOD NewMethod\nEND_METHOD")
+    with open(xml_only, "w") as handle:
+        handle.write("<Single/>")
+
+    from ide_collapsed_pou_import import _families_from_disk_view_gaps
+
+    families = _families_from_disk_view_gaps(views)
+    assert "FB_Main" in families

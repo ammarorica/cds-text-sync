@@ -95,7 +95,7 @@ def collapsed_pou_ancestor(obj):
 
 
 def collect_affected_families(
-    project, patch_root, text_creates=None, compare_report_path=None
+    project, patch_root, text_creates=None, compare_report_path=None, view_root=None
 ):
     families = {}
     for entry in text_creates or []:
@@ -129,12 +129,54 @@ def collect_affected_families(
         except Exception:
             report = {}
         objects = report.get("objects") or {}
-        for category in ("modified", "added"):
+        for category in ("modified", "added", "deleted"):
             for obj in objects.get(category) or []:
                 family = _family_from_report_object(obj)
                 if family:
                     families[family.lower()] = family
 
+    for family in _families_from_disk_view_gaps(view_root):
+        families[family.lower()] = family
+
+    return list(families.values())
+
+
+def _families_from_disk_view_gaps(view_root):
+    """Find collapsed POU families with .st/.xml sidecar mismatches on disk."""
+    if not view_root or not os.path.isdir(view_root):
+        return []
+
+    families = {}
+    for root, _dirs, files in os.walk(view_root):
+        for filename in files:
+            lower_name = filename.lower()
+            if lower_name.endswith(".st"):
+                base_name = os.path.splitext(filename)[0]
+                if "." not in base_name:
+                    continue
+                xml_name = base_name + ".xml"
+                if not os.path.isfile(os.path.join(root, xml_name)):
+                    rel_path = os.path.relpath(
+                        os.path.join(root, filename), view_root
+                    ).replace(os.sep, "/")
+                    family = family_name_from_st_path(rel_path)
+                    if family:
+                        families[family.lower()] = family
+                continue
+            if not lower_name.endswith(".xml"):
+                continue
+            base_name = os.path.splitext(filename)[0]
+            if "." not in base_name:
+                continue
+            st_name = base_name + ".st"
+            if os.path.isfile(os.path.join(root, st_name)):
+                continue
+            rel_path = os.path.relpath(
+                os.path.join(root, filename), view_root
+            ).replace(os.sep, "/")
+            family = family_name_from_st_path(rel_path)
+            if family:
+                families[family.lower()] = family
     return list(families.values())
 
 
@@ -235,6 +277,7 @@ def apply_collapsed_families(project, view_root, family_names, log_fn=None):
     excluded_guids = set()
     updated_names = []
     skipped_create_paths = set()
+    disk_cleanup_entries = []
 
     for parent_name in family_names or []:
         parent_obj = _find_parent_object(project, parent_name)
@@ -304,6 +347,42 @@ def apply_collapsed_families(project, view_root, family_names, log_fn=None):
                 updated_names.append(entry["name"])
             created_by_name[object_name(child).lower()] = child
 
+        disk_child_names = {
+            entry["name"].lower()
+            for entry in entries
+            if not entry.get("is_parent")
+        }
+        sample_dir = os.path.dirname(entries[0]["path"]).replace("\\", "/")
+        if hasattr(parent_obj, "create_method"):
+            for child in list(_iap._children_of(parent_obj)):
+                child_name = object_name(child)
+                if not child_name or child_name.lower() in disk_child_names:
+                    continue
+                if hasattr(child, "remove"):
+                    try:
+                        child.remove()
+                        log(
+                            "Removed IDE child missing from disk: {0}.{1}".format(
+                                parent_name, child_name
+                            )
+                        )
+                    except Exception as error:
+                        log(
+                            "Could not remove IDE child {0}.{1}: {2}".format(
+                                parent_name, child_name, error
+                            )
+                        )
+                        continue
+                rel_base = "{0}/{1}.{2}".format(sample_dir, parent_name, child_name)
+                disk_cleanup_entries.append(
+                    {
+                        "guid": normalize_guid(getattr(child, "guid", "")),
+                        "name": child_name,
+                        "parent_name": parent_name,
+                        "path": rel_base + ".st",
+                    }
+                )
+
         excluded_guids.update(_collect_object_guids(parent_obj))
         log(
             "Collapsed POU family imported as text: {0} ({1} file(s))".format(
@@ -315,4 +394,5 @@ def apply_collapsed_families(project, view_root, family_names, log_fn=None):
         "excluded_guids": excluded_guids,
         "updated_names": updated_names,
         "skipped_create_paths": skipped_create_paths,
+        "disk_cleanup_entries": disk_cleanup_entries,
     }

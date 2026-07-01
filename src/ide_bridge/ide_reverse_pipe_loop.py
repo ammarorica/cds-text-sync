@@ -3400,6 +3400,21 @@ def _cmd_sync_import_text(params):
         import ide_collapsed_pou_import as _cpi
 
         views_path = os.path.join(sync_folder, "project-view")
+        manifest_path = os.path.join(sync_folder, ".dump", "manifest.json")
+        text_deletes = _iap._text_delete_entries(root)
+        guid_map = _iap._build_guid_map(project)
+        for entry in text_deletes:
+            try:
+                _iap._apply_text_delete(project, entry, guid_map)
+            except Exception as e:
+                _log(
+                    "Failed to delete {0}: {1}".format(
+                        entry.get("name") or entry.get("guid"), e
+                    )
+                )
+        if text_deletes:
+            guid_map = _iap._build_guid_map(project)
+
         families = _cpi.collect_affected_families(
             project,
             root,
@@ -3407,10 +3422,12 @@ def _cmd_sync_import_text(params):
             compare_report_path=compare_report_path
             if os.path.exists(compare_report_path)
             else None,
+            view_root=views_path,
         )
 
         exclude_native_guids = set()
         updated_text = []
+        disk_cleanup_entries = list(text_deletes)
         if families:
             family_result = _cpi.apply_collapsed_families(
                 project, views_path, families, log_fn=_log
@@ -3418,11 +3435,25 @@ def _cmd_sync_import_text(params):
             exclude_native_guids.update(family_result.get("excluded_guids") or [])
             updated_text = list(family_result.get("updated_names") or [])
             skipped_paths = family_result.get("skipped_create_paths") or set()
+            disk_cleanup_entries.extend(
+                family_result.get("disk_cleanup_entries") or []
+            )
             text_creates = [
                 entry
                 for entry in text_creates
                 if entry.get("path") not in skipped_paths
             ]
+
+        if disk_cleanup_entries:
+            removed_files = _iap.cleanup_deleted_view_files(
+                views_path, manifest_path, disk_cleanup_entries
+            )
+            if removed_files:
+                _log(
+                    "Removed deleted view files: {0}".format(
+                        ", ".join(removed_files)
+                    )
+                )
 
         text_handled_guids = _iap.apply_textual_patches_from_patch(
             project, root, exclude_guids=list(exclude_native_guids)
@@ -3481,7 +3512,14 @@ def _cmd_sync_import_text(params):
                 except Exception as e:
                     _log("Failed to create {0}: {1}".format(entry["name"], str(e)))
             _log("Created text objects: {0}".format(", ".join(e["name"] for e in text_creates)))
-        
+
+        import ide_view_sync as _ivs
+
+        if not _ivs.sync_view_after_import(
+            project, sync_folder, views_path, manifest_path, log_fn=_log
+        ):
+            _log("Warning: post-import view export did not complete.")
+
         return {"ok": True, "data": {
             "path": patch_path,
             "size": os.path.getsize(patch_path),

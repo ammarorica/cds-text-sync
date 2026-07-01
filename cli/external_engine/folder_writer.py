@@ -9,6 +9,7 @@ import os
 import time
 
 from _project_layout import is_reserved_root_child
+from _project_model import is_cds_object_xml_path
 from _project_profiles import enabled_projection_options, kind_for_type_guid
 from xml_helpers import (
     csv_projection_content,
@@ -350,9 +351,36 @@ class FolderWriter:
         return os.path.join(*(parent_parts[:-1] + [flat_name])) + extension
 
     def _xml_path_for_node(self, project_model, node):
-        return self._flat_nested_path(
-            project_model, node, ".xml"
-        ) or node.get_view_path(project_model, extension=".xml")
+        flat = self._flat_nested_path(project_model, node, ".xml")
+        if flat:
+            return flat
+        view_path = node.get_view_path(project_model, extension=".xml")
+        if is_cds_object_xml_path(view_path):
+            return None
+        return view_path or None
+
+    def _remove_cds_object_xml_files(self):
+        if not os.path.exists(self.views_path):
+            return 0
+        removed = 0
+        for root, _dirs, files in os.walk(self.views_path):
+            for filename in files:
+                if filename.lower() != ".cds-object.xml":
+                    continue
+                full_path = os.path.join(root, filename)
+                try:
+                    os.remove(full_path)
+                    removed += 1
+                    self._remove_empty_parent_dirs(full_path)
+                except Exception as error:
+                    _log(
+                        "Warning: Could not remove legacy container xml: {0} {1}".format(
+                            full_path, error
+                        )
+                    )
+        if removed:
+            _log("Removed {0} legacy .cds-object.xml file(s).".format(removed))
+        return removed
 
     def _node_projection_options(self, node):
         kind = kind_for_type_guid(self.profile, node.type)
@@ -563,10 +591,13 @@ class FolderWriter:
                 if full_projection_path:
                     emitted_paths.add(full_projection_path)
 
+            if xml_path is None and not projection_paths:
+                continue
+
             xml_text = entry_to_xml(node.entry_element)
             if projection_paths and self._has_st_projection(projection_options):
                 xml_text = externalized_text_xml(node.entry_element)
-            if xml_text is not None:
+            if xml_text is not None and xml_path is not None:
                 full_path = self._safe_view_path(xml_path)
                 if not full_path:
                     continue
@@ -592,6 +623,7 @@ class FolderWriter:
 
         if selected_guids is None:
             self._remove_orphan_projection_files(emitted_paths)
+            self._remove_cds_object_xml_files()
 
         manifest_entries = self._merge_manifest_entries(
             selected_guids, manifest_entries

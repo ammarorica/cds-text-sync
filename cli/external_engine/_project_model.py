@@ -38,8 +38,16 @@ class ProjectNode:
         """Constructs the view path string based on the native IDE path."""
         parts = self.get_output_parts(model)
         if model.has_output_children(self):
-            return os.path.join(*(parts + [".cds-object.xml"]))
+            return os.path.join(*(parts + [CDS_OBJECT_XML]))
         return os.path.join(*parts) + extension if parts else ""
+
+
+CDS_OBJECT_XML = ".cds-object.xml"
+
+
+def is_cds_object_xml_path(path):
+    return os.path.basename(str(path or "").replace("\\", "/")).lower() == CDS_OBJECT_XML
+
 
 class ProjectModel:
     def __init__(self, namespace=""):

@@ -10,6 +10,18 @@ import ide_export_snapshot
 import ide_runtime_common as _rc
 
 
+CDS_OBJECT_XML = ".cds-object.xml"
+
+
+def is_flat_st_sidecar_xml(filename):
+    """True for Parent.Child.xml flat sidecars, not hierarchical .cds-object.xml."""
+    name = os.path.basename(str(filename or "")).lower()
+    if name == CDS_OBJECT_XML:
+        return False
+    base, ext = os.path.splitext(name)
+    return ext == ".xml" and "." in base and not base.startswith(".")
+
+
 def _log_or_print(log_fn, message):
     if log_fn:
         log_fn(message)
@@ -51,9 +63,13 @@ def reconcile_view_files(view_root, manifest_path, log_fn=None):
         if st_paths and xml_path:
             xml_paths_expecting_st.add(xml_path)
 
-        if st_paths and all(
-            not os.path.isfile(os.path.join(view_root, path.replace("/", os.sep)))
-            for path in st_paths
+        if (
+            st_paths
+            and all(
+                not os.path.isfile(os.path.join(view_root, path.replace("/", os.sep)))
+                for path in st_paths
+            )
+            and os.path.basename(xml_path).lower() != CDS_OBJECT_XML
         ):
             for rel_path in [xml_path] + st_paths + list(entry.get("projection_paths") or []):
                 rel_text = str(rel_path or "").replace("\\", "/")
@@ -83,7 +99,7 @@ def reconcile_view_files(view_root, manifest_path, log_fn=None):
 
     for root, _dirs, files in os.walk(view_root):
         for filename in files:
-            if not filename.lower().endswith(".xml"):
+            if not is_flat_st_sidecar_xml(filename):
                 continue
             rel_path = os.path.relpath(
                 os.path.join(root, filename), view_root
@@ -94,8 +110,6 @@ def reconcile_view_files(view_root, manifest_path, log_fn=None):
             ).replace("\\", "/")
             st_full = os.path.join(view_root, st_rel.replace("/", os.sep))
             if os.path.isfile(st_full):
-                continue
-            if rel_path not in xml_paths_expecting_st and "." not in base_name:
                 continue
             deleted = _remove_file(view_root, rel_path)
             if deleted:
@@ -140,9 +154,32 @@ def sync_view_from_ide(project, project_root, log_fn=None):
 def sync_view_after_import(project, project_root, view_root, manifest_path, log_fn=None):
     """Export IDE state to disk, then prune xml/manifest rows that lack a .st file."""
     ok = sync_view_from_ide(project, project_root, log_fn=log_fn)
+    removed_legacy = _remove_legacy_cds_object_xml(view_root, log_fn=log_fn)
     reconciled = reconcile_view_files(view_root, manifest_path, log_fn=log_fn)
+    if removed_legacy:
+        _log_or_print(
+            log_fn,
+            "Removed legacy .cds-object.xml: {0}".format(", ".join(removed_legacy)),
+        )
     if reconciled:
         _log_or_print(
             log_fn, "Reconciled view files: {0}".format(", ".join(reconciled))
         )
     return ok
+
+
+def _remove_legacy_cds_object_xml(view_root, log_fn=None):
+    removed = []
+    if not view_root or not os.path.isdir(view_root):
+        return removed
+    for root, _dirs, files in os.walk(view_root):
+        for filename in files:
+            if filename.lower() != CDS_OBJECT_XML:
+                continue
+            rel_path = os.path.relpath(
+                os.path.join(root, filename), view_root
+            ).replace(os.sep, "/")
+            deleted = _remove_file(view_root, rel_path)
+            if deleted:
+                removed.append(deleted)
+    return removed

@@ -53,9 +53,8 @@ class TestGetViewPath:
         node.display_path = ["Folder"]
         assert node.get_view_path(model) == os.path.join("Folder", "Obj.xml")
 
-    def test_object_with_output_children_uses_cds_object_xml(self):
-        """When a node has output children, the view path ends in
-        ``.cds-object.xml``."""
+    def test_object_with_output_children_uses_cds_object_xml_path(self):
+        """Internal view path still uses .cds-object.xml; export skips writing it."""
         model = ProjectModel()
         parent = ProjectNode("parent-guid", "Parent")
         parent.display_path = ["Folder"]

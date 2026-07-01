@@ -51,6 +51,38 @@ class TestFolderWriterWrite:
         xml_path = os.path.join(views, "Folder", "MyObj.xml")
         assert os.path.exists(xml_path)
 
+    def test_container_parent_does_not_emit_cds_object_xml(self, tmp_path):
+        import xml.etree.ElementTree as ET
+
+        views = str(tmp_path / "views")
+        dump = str(tmp_path / ".dump")
+        os.makedirs(dump, exist_ok=True)
+        legacy_container = os.path.join(
+            views, "Device", "Application", ".cds-object.xml"
+        )
+        _write_file(views, "Device/Application/.cds-object.xml", "<Single/>")
+
+        parent = ProjectNode("parent-guid", "Application")
+        parent.display_path = ["Device"]
+        parent.entry_element = ET.Element("Single", {"Name": "Object"})
+        child = ProjectNode("child-guid", "PLC_PRG", parent_guid="parent-guid")
+        child.display_path = ["Device", "Application"]
+        child.entry_element = ET.Element("Single", {"Name": "Object"})
+        model = ProjectModel()
+        model.add_node(parent)
+        model.add_node(child)
+
+        writer = FolderWriter(views, dump)
+        writer.write(model)
+
+        assert not os.path.exists(legacy_container)
+        assert not os.path.exists(
+            os.path.join(views, "Device", "Application", ".cds-object.xml")
+        )
+        assert os.path.exists(
+            os.path.join(views, "Device", "Application", "PLC_PRG.xml")
+        )
+
     def test_selected_guid_export_preserves_other_entries(self, tmp_path):
         """When exporting with ``selected_guids``, the writer should replace
         only selected manifest entries and preserve non-selected ones."""

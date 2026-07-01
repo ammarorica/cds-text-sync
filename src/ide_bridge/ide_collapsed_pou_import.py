@@ -165,8 +165,10 @@ def _families_from_disk_view_gaps(view_root):
                 continue
             if not lower_name.endswith(".xml"):
                 continue
+            if lower_name == ".cds-object.xml":
+                continue
             base_name = os.path.splitext(filename)[0]
-            if "." not in base_name:
+            if "." not in base_name or base_name.startswith("."):
                 continue
             st_name = base_name + ".st"
             if os.path.isfile(os.path.join(root, st_name)):

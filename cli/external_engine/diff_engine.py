@@ -171,6 +171,15 @@ class DiffEngine:
         if unsupported_paths:
             unsupported_projection_changes[folder_guid] = unsupported_paths
 
+    def _is_disk_unmanaged(self, guid):
+        """IDE tree nodes that are not represented as view files on disk."""
+        ide_node = self.ide_model.get_node(guid)
+        if ide_node is None:
+            return False
+        if self.ide_model.has_output_children(ide_node):
+            return True
+        return False
+
     def compare(self):
         diff_result = {"modified": [], "added": [], "deleted": [], "unchanged": []}
         projection_conflicts = []
@@ -215,10 +224,17 @@ class DiffEngine:
 
         for guid in ide_guids - folder_guids:
             if guid not in projected_ide_guids:
-                diff_result["deleted"].append(guid)
+                if self._is_disk_unmanaged(guid):
+                    diff_result["unchanged"].append(guid)
+                else:
+                    diff_result["deleted"].append(guid)
 
         for key in set(ide_proj) - set(folder_proj):
-            diff_result["deleted"].append(ide_proj[key])
+            guid = ide_proj[key]
+            if self._is_disk_unmanaged(guid):
+                diff_result["unchanged"].append(guid)
+            else:
+                diff_result["deleted"].append(guid)
 
         for key in set(folder_proj) - set(ide_proj):
             diff_result["added"].append(folder_proj[key])

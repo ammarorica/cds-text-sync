@@ -145,6 +145,17 @@ class TestDiffEngineCollapsed:
         result = DiffEngine(ide, folder, profile=load_profile("default")).compare()
         assert "c1" in result["deleted"]
 
+    def test_container_missing_from_disk_is_unchanged_not_deleted(self):
+        parent = _make_node("p1", name="Application")
+        parent.display_path = ["Device"]
+        child = _make_node("c1", name="PLC_PRG", parent_guid="p1", code="x")
+        child.display_path = ["Device", "Application"]
+        ide = model_with(parent, child)
+        folder = model_with(child)
+        result = DiffEngine(ide, folder).compare()
+        assert "p1" not in result["deleted"]
+        assert "p1" in result["unchanged"]
+
     def test_nested_object_compared_when_present_in_folder(self):
         """A nested node under a collapsed parent that *is* present in the
         folder model should appear in the diff."""

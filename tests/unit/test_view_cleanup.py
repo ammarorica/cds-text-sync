@@ -5,7 +5,7 @@ import os
 import tempfile
 
 from ide_apply_patch import cleanup_deleted_view_files, _related_view_paths
-from ide_view_sync import reconcile_view_files
+from ide_view_sync import reconcile_view_files, is_flat_st_sidecar_xml
 
 
 def test_related_view_paths_pairs_st_and_xml():
@@ -131,3 +131,38 @@ def test_cleanup_deleted_view_files_prunes_manifest_by_path_without_guid(tmp_pat
         manifest = json.load(handle)
     assert manifest["entries"] == []
     assert "Device/Application/FB.Method.xml" in removed
+
+
+def test_is_flat_st_sidecar_xml_excludes_cds_object():
+    assert is_flat_st_sidecar_xml("FB.Method.xml") is True
+    assert is_flat_st_sidecar_xml(".cds-object.xml") is False
+    assert is_flat_st_sidecar_xml("PLC_PRG.xml") is False
+
+
+def test_reconcile_preserves_plain_container_xml(tmp_path):
+    views = str(tmp_path / "views")
+    dump = str(tmp_path / ".dump")
+    os.makedirs(os.path.join(views, "Device", "Application"))
+    child_xml = os.path.join(views, "Device", "Application", "PLC_PRG.xml")
+    with open(child_xml, "w") as handle:
+        handle.write("<Single/>")
+
+    manifest_path = os.path.join(dump, "manifest.json")
+    os.makedirs(dump)
+    with open(manifest_path, "w") as handle:
+        json.dump(
+            {
+                "entries": [
+                    {
+                        "guid": "plc-guid",
+                        "name": "PLC_PRG",
+                        "xml_path": "Device/Application/PLC_PRG.xml",
+                    }
+                ]
+            },
+            handle,
+        )
+
+    removed = reconcile_view_files(views, manifest_path)
+    assert os.path.exists(child_xml)
+    assert removed == []

@@ -1,7 +1,7 @@
-/.runtime/__pycache__
-/__pycache__
-/cli/external_engine/__pycache__
-/src/ide_bridge/__pycache__
-/src/ide_bridge/__pycache__
-/cli/external_engine/__pycache__
-*.pyc
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Test / tooling caches
+.pytest_cache/

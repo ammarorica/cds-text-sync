@@ -95,7 +95,8 @@ def collapsed_pou_ancestor(obj):
 
 
 def collect_affected_families(
-    project, patch_root, text_creates=None, compare_report_path=None, view_root=None
+    project, patch_root, text_creates=None, compare_report_path=None, view_root=None,
+    guid_map=None,
 ):
     families = {}
     for entry in text_creates or []:
@@ -108,7 +109,8 @@ def collect_affected_families(
             families[family.lower()] = family
 
     if patch_root is not None:
-        guid_map = _iap._build_guid_map(project)
+        if guid_map is None:
+            guid_map = _iap._build_guid_map(project)
         for guid in _iap._patch_object_guids(patch_root):
             obj = guid_map.get(guid)
             if obj is None:
@@ -264,11 +266,13 @@ def _collect_object_guids(obj):
     return guids
 
 
-def _find_parent_object(project, parent_name):
+def _find_parent_object(project, parent_name, guid_map=None):
     parent_lower = str(parent_name or "").lower()
     if not parent_lower:
         return None
-    for obj in _iap._build_guid_map(project).values():
+    if guid_map is None:
+        guid_map = _iap._build_guid_map(project)
+    for obj in guid_map.values():
         if object_name(obj).lower() == parent_lower:
             return obj
     return None
@@ -290,7 +294,7 @@ def _filter_family_entries(entries, only_st_paths):
 
 
 def apply_collapsed_families(
-    project, view_root, family_names, log_fn=None, only_st_paths=None
+    project, view_root, family_names, log_fn=None, only_st_paths=None, guid_map=None
 ):
     log = log_fn or print
     updated_guids = set()
@@ -299,7 +303,7 @@ def apply_collapsed_families(
     disk_cleanup_entries = []
 
     for parent_name in family_names or []:
-        parent_obj = _find_parent_object(project, parent_name)
+        parent_obj = _find_parent_object(project, parent_name, guid_map=guid_map)
         if parent_obj is None:
             log("Collapsed POU family skipped, parent not found: " + str(parent_name))
             continue

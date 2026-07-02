@@ -121,8 +121,26 @@ def reconcile_view_files(view_root, manifest_path, log_fn=None):
     return removed
 
 
-def sync_view_from_ide(project, project_root, log_fn=None):
-    """Export a fresh IDE snapshot into project-view/ (xml sidecars + manifest)."""
+def _filter_guid_args(selected_guids):
+    guids = []
+    seen = set()
+    for guid in selected_guids or []:
+        value = _rc.normalize_guid(guid)
+        if value and value not in seen:
+            seen.add(value)
+            guids.append(value)
+    if not guids:
+        return []
+    return ["--filter-guids", ",".join(guids)]
+
+
+def sync_view_from_ide(project, project_root, log_fn=None, selected_guids=None):
+    """Export a fresh IDE snapshot into project-view/ (xml sidecars + manifest).
+
+    When ``selected_guids`` is given, only those objects are exported and written,
+    so a selective/diff import doesn't re-serialize the whole project on the way
+    back out to disk.
+    """
     if project is None or not project_root:
         return False
 
@@ -132,7 +150,9 @@ def sync_view_from_ide(project, project_root, log_fn=None):
         os.makedirs(dump_dir)
 
     snapshot_path = os.path.join(dump_dir, "IDE.post-import.xml")
-    if not ide_export_snapshot.export_snapshot(None, project, snapshot_path):
+    if not ide_export_snapshot.export_snapshot(
+        None, project, snapshot_path, selected_guids=selected_guids
+    ):
         _log_or_print(log_fn, "Post-import IDE snapshot export failed.")
         return False
 
@@ -143,6 +163,7 @@ def sync_view_from_ide(project, project_root, log_fn=None):
         "--snapshot",
         snapshot_path,
     ]
+    args.extend(_filter_guid_args(selected_guids))
     ok = _rc.run_external_engine(args, project_root=project_root)
     if ok:
         _log_or_print(log_fn, "Post-import view export completed.")
@@ -151,9 +172,11 @@ def sync_view_from_ide(project, project_root, log_fn=None):
     return ok
 
 
-def sync_view_after_import(project, project_root, view_root, manifest_path, log_fn=None):
+def sync_view_after_import(project, project_root, view_root, manifest_path, log_fn=None, selected_guids=None):
     """Export IDE state to disk, then prune xml/manifest rows that lack a .st file."""
-    ok = sync_view_from_ide(project, project_root, log_fn=log_fn)
+    ok = sync_view_from_ide(
+        project, project_root, log_fn=log_fn, selected_guids=selected_guids
+    )
     removed_legacy = _remove_legacy_cds_object_xml(view_root, log_fn=log_fn)
     reconciled = reconcile_view_files(view_root, manifest_path, log_fn=log_fn)
     if removed_legacy:

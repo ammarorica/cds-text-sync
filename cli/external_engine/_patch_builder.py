@@ -20,6 +20,19 @@ from xml_helpers import (
     text_blob_elements,
 )
 
+def _write_patch_tree(patch_tree, output_path):
+    """Write IMPORT.xml as ASCII so non-ASCII text becomes numeric character
+    references (e.g. ``&#8220;``).
+
+    The patch is parsed on the CODESYS side by IronPython's XML parser, which
+    mishandles multi-byte UTF-8 sequences (it rejects smart quotes and other
+    non-ASCII characters as "illegal character in content"). Emitting pure ASCII
+    with character references round-trips to the correct Unicode on parse and is
+    accepted by every XML reader.
+    """
+    patch_tree.write(output_path, encoding="ascii", xml_declaration=True)
+
+
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 DEFAULT_STRUCTURED_VIEW_SINGLE_ATTRS = {
     XML_SPACE: "preserve",
@@ -423,7 +436,7 @@ class PatchBuilder:
 
         if not patch_guids and not create_guids and not deleted_guids:
             patch_tree = ET.ElementTree(patch_root)
-            patch_tree.write(output_path, encoding="utf-8", xml_declaration=True)
+            _write_patch_tree(patch_tree, output_path)
             print("No changes detected to patch.")
             print("Empty patch generated at", output_path)
             return False
@@ -487,6 +500,6 @@ class PatchBuilder:
                 self._append_text_create(creates_root, guid)
 
         patch_tree = ET.ElementTree(patch_root)
-        patch_tree.write(output_path, encoding="utf-8", xml_declaration=True)
+        _write_patch_tree(patch_tree, output_path)
         print("Patch generated at", output_path)
         return True

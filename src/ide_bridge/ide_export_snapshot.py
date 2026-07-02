@@ -42,14 +42,98 @@ def _missing_external_path_from_name(name):
     return candidate
 
 
-def _exportable_snapshot_objects(project):
-    objects = []
+def _object_guid(obj):
+    try:
+        return ide_runtime_common.normalize_guid(obj.guid)
+    except Exception:
+        return None
+
+
+def _selected_guid_set(selected_guids):
+    if not selected_guids:
+        return None
+    result = set()
+    for guid in selected_guids:
+        normalized = ide_runtime_common.normalize_guid(guid)
+        if normalized:
+            result.add(normalized)
+    return result or None
+
+
+def _collapsed_pou_ancestor(obj):
+    """Return the highest ancestor (or self) that owns methods (a collapsed POU).
+
+    Collapsed POUs (function blocks/programs) expose their methods, actions and
+    properties as child objects, but the disk view represents the whole family
+    together. A correct diff therefore needs the entire parent POU in the
+    snapshot, not just the edited child. Objects with a ``create_method`` API are
+    the collapsed containers, so we walk up recording the top-most one.
+    """
+    ancestor = None
+    current = obj
+    while current is not None:
+        try:
+            if hasattr(current, "create_method"):
+                ancestor = current
+        except Exception:
+            pass
+        try:
+            current = current.parent
+        except Exception:
+            break
+    return ancestor
+
+
+def _expand_export_roots(candidates, selected):
+    """Map selected GUIDs to the objects that must be exported for a valid diff.
+
+    A selected object that lives inside a collapsed POU is replaced by that POU
+    so the whole family is serialized (recursively). Standalone objects export
+    themselves.
+    """
+    by_guid = {}
+    for obj in candidates:
+        guid = _object_guid(obj)
+        if guid and guid not in by_guid:
+            by_guid[guid] = obj
+
+    roots = []
+    seen = set()
+    for guid in selected:
+        obj = by_guid.get(guid)
+        if obj is None:
+            continue
+        root = _collapsed_pou_ancestor(obj) or obj
+        key = id(root)
+        if key not in seen:
+            seen.add(key)
+            roots.append(root)
+    return roots
+
+
+def _exportable_snapshot_objects(project, selected_guids=None):
+    """Return (objects, skipped, recursive) for the native export.
+
+    When ``selected_guids`` is given, only the selected objects (expanded to
+    their collapsed POU parents) are exported, recursively, so collapsed
+    sub-objects diff correctly. Otherwise the full project is exported flat
+    (recursive=False) because ``get_children(recursive=True)`` already lists
+    every object.
+    """
     skipped = []
     try:
         candidates = project.get_children(recursive=True)
     except Exception:
+        # Could not flatten the tree; fall back to a full recursive export.
         return project.get_children(), skipped, True
 
+    selected = _selected_guid_set(selected_guids)
+    if selected is not None:
+        # Filtered exports must be recursive so descendants of the selected
+        # objects (e.g. collapsed POU children) are serialized alongside them.
+        return _expand_export_roots(candidates, selected), skipped, True
+
+    objects = []
     for obj in candidates:
         name = ide_runtime_common.object_name(obj)
         missing_path = _missing_external_path_from_name(name)
@@ -91,10 +175,15 @@ def _print_skipped_external_resources(skipped, log_fn=None):
             print(message)
 
 
-def export_snapshot(system, project, output_path, log_fn=None):
+def export_snapshot(system, project, output_path, log_fn=None, selected_guids=None):
     """
-    Exports the entire project into a single native XML file.
-    Uses a temporary target to avoid CODESYS overwrite prompts.
+    Exports the project into a single native XML file.
+
+    When ``selected_guids`` is provided, only those objects (and their
+    descendants) are exported, which dramatically speeds up selective/diff
+    imports on large projects. Falls back to a full export when no selected
+    object can be resolved. Uses a temporary target to avoid CODESYS overwrite
+    prompts.
     """
     if log_fn:
         log_fn("Exporting snapshot to: " + output_path)
@@ -112,12 +201,21 @@ def export_snapshot(system, project, output_path, log_fn=None):
         pass
 
     try:
-        objects, skipped, use_recursive = _exportable_snapshot_objects(project)
+        objects, skipped, use_recursive = _exportable_snapshot_objects(
+            project, selected_guids=selected_guids
+        )
+        if selected_guids and not objects:
+            message = (
+                "No snapshot objects matched the selected GUIDs; "
+                "exporting the full project instead."
+            )
+            if log_fn:
+                log_fn(message)
+            else:
+                print(message)
+            objects, skipped, use_recursive = _exportable_snapshot_objects(project)
         _print_skipped_external_resources(skipped, log_fn=log_fn)
-        if use_recursive:
-            project.export_native(objects, tmp_path, recursive=True)
-        else:
-            project.export_native(objects, tmp_path, recursive=False)
+        project.export_native(objects, tmp_path, recursive=bool(use_recursive))
         _replace_file(tmp_path, output_path)
         return True
     except Exception as e:

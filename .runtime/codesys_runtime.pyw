@@ -31,6 +31,7 @@ CORE_MODULES = [
 OPERATION_MODULES = {
     "export": "codesys_extractor_operation",
     "import": "codesys_injector_operation",
+    "import_diff": "codesys_import_diff_operation",
     "extract": "codesys_extractor_operation",
     "inject": "codesys_injector_operation",
     "compare": "codesys_compare_operation",
@@ -439,7 +440,7 @@ def run_operation(command, params=None, runtime=None, caller_globals=None, scrip
     operation_module.system = runtime.system
     operation_module.projects = runtime.projects
 
-    if command in ("export", "import"):
+    if command in ("export", "import", "import_diff"):
         try:
             utils_mod = sys.modules.get("codesys_utils")
             if utils_mod and hasattr(utils_mod, "set_info_logging"):

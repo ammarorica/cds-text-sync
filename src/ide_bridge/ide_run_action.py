@@ -110,23 +110,33 @@ def run_action(
     if not os.path.exists(dump_root):
         os.makedirs(dump_root)
         
-    # 1. Export Snapshot
-    if not ide_export_snapshot.export_snapshot(system, project, ide_xml_path, log_fn=detailed_log):
+    # 1. Export Snapshot. For selective/diff imports we only export the changed
+    #    objects, which avoids a full-project native export on large projects.
+    if not ide_export_snapshot.export_snapshot(
+        system,
+        project,
+        ide_xml_path,
+        log_fn=detailed_log,
+        selected_guids=selected_guids if action in ("import", "export") else None,
+    ):
         ide_runtime_common.log_error("Failed to export native IDE snapshot.")
         return False
     
     # 2. Invoke Engine CLI
     args = [action, "--project-root", project_root, "--snapshot", ide_xml_path, "--view-root", views_path]
     args.extend(_selected_guid_args(selected_guids))
-    
+
+    compare_report_path = os.path.join(dump_root, "compare_report.json")
     if action == "compare":
-        report_path = os.path.join(dump_root, "compare_report.json")
-        args.extend(["--report", report_path])
+        args.extend(["--report", compare_report_path])
         if include_objects:
             args.append("--include-objects")
     elif action == "import":
         patch_path = os.path.join(dump_root, "IMPORT.xml")
-        args.extend(["--patch", patch_path])
+        # Produce the patch and the compare report in a single engine pass.
+        args.extend(
+            ["--patch", patch_path, "--report", compare_report_path, "--include-objects"]
+        )
 
     def warning_fn(message):
         _show_warning(system, message)
@@ -142,20 +152,7 @@ def run_action(
         if not ide_backup.ensure_pre_import_backup(project, project_root, project_layout.backup_root, patch_path):
             ide_runtime_common.log_error("Pre-import backup failed. Import was not applied.")
             return False
-        compare_report_path = os.path.join(dump_root, "compare_report.json")
-        compare_args = [
-            "compare",
-            "--project-root",
-            project_root,
-            "--snapshot",
-            ide_xml_path,
-            "--report",
-            compare_report_path,
-            "--include-objects",
-        ]
-        ide_runtime_common.run_external_engine(
-            compare_args, project_root=project_root, dump_root=dump_root
-        )
+        # The compare report was already produced by the import pass above.
         apply_result = ide_apply_patch.apply_patch(
             system,
             project,
@@ -165,6 +162,7 @@ def run_action(
             if os.path.exists(compare_report_path)
             else None,
             log_fn=detailed_log,
+            selected_guids=selected_guids,
         )
         if not apply_result:
             if hasattr(apply_result, "summary"):

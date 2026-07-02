@@ -1294,10 +1294,19 @@ def _modified_st_paths_from_compare_report(report_path):
     return paths
 
 
-def apply_patch(system, project, patch_path, view_root=None, compare_report_path=None, log_fn=None):
+def apply_patch(system, project, patch_path, view_root=None, compare_report_path=None, log_fn=None, selected_guids=None):
     """
     Applies the pre-computed IMPORT.xml to the current project.
+
+    When ``selected_guids`` is provided (selective/diff import), the post-import
+    view sync only re-exports the objects that were touched instead of the whole
+    project, which keeps a diff import fast on large projects.
     """
+    selected_guid_set = set()
+    for guid in selected_guids or []:
+        normalized = normalize_guid(guid)
+        if normalized:
+            selected_guid_set.add(normalized)
     log = log_fn or print
     result = ApplyPatchResult()
     log("Applying patch from: " + patch_path)
@@ -1330,6 +1339,7 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
                 text_creates=text_creates,
                 compare_report_path=compare_report_path,
                 view_root=view_root,
+                guid_map=guid_map,
             )
             if families:
                 only_st_paths = None
@@ -1343,6 +1353,7 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
                     families,
                     log_fn=log,
                     only_st_paths=only_st_paths or None,
+                    guid_map=guid_map,
                 )
                 exclude_native_guids.update(
                     family_result.get("updated_guids")
@@ -1398,12 +1409,23 @@ def apply_patch(system, project, patch_path, view_root=None, compare_report_path
                     manifest_path = os.path.join(
                         os.path.dirname(patch_path), "manifest.json"
                     )
+                    # For a selective import that neither created nor deleted
+                    # objects, only re-export the touched objects so the post
+                    # import sync doesn't re-serialize the whole project.
+                    sync_guids = None
+                    if (
+                        selected_guid_set
+                        and not result.created_paths
+                        and not result.deleted_guids
+                    ):
+                        sync_guids = result.applied_guids or sorted(selected_guid_set)
                     _ivs.sync_view_after_import(
                         project,
                         project_root,
                         view_root,
                         manifest_path,
                         log_fn=log,
+                        selected_guids=sync_guids,
                     )
                 except Exception as error:
                     log(

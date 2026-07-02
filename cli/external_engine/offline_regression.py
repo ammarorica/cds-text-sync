@@ -1151,6 +1151,35 @@ def main():
             "generated patch",
         )
 
+        # The import command should emit the compare report in the same pass so
+        # callers don't need a second, redundant full compare over the snapshot.
+        single_pass_patch_path = os.path.join(dump_path, "IMPORT_single_pass.xml")
+        single_pass_report_path = os.path.join(dump_path, "compare_single_pass.json")
+        _run([
+            "import",
+            "--project-root", project_root,
+            "--snapshot", snapshot_path,
+            "--views", views_path,
+            "--patch", single_pass_patch_path,
+            "--report", single_pass_report_path,
+            "--include-objects",
+        ])
+        if not os.path.exists(single_pass_report_path):
+            raise RegressionFailure("import --report did not write a compare report in the same pass")
+        single_pass_report = _read_json(single_pass_report_path)
+        _assert_equal(
+            single_pass_report.get("summary", {}).get("modified"),
+            1,
+            "single-pass import report modified count",
+        )
+        _assert_equal(
+            single_pass_report.get("details", {}).get("modified"),
+            ["11111111-1111-1111-1111-111111111111"],
+            "single-pass import report modified guids",
+        )
+        if not single_pass_report.get("objects", {}).get("modified"):
+            raise RegressionFailure("single-pass import report omitted object details")
+
         empty_selected_patch_path = os.path.join(dump_path, "IMPORT_empty_selected.xml")
         _run([
             "import",

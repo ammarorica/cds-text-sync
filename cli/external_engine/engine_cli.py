@@ -257,6 +257,18 @@ def run_import(args):
         print("Failed to build import patch:", error)
         sys.exit(1)
 
+    # Emit the compare report in the same pass so callers don't have to run a
+    # second, redundant full compare over the same snapshot and disk view.
+    report_path = getattr(args, "report", None)
+    if report_path:
+        reporter = ReportWriter(report_path)
+        reporter.write_diff_report(
+            diff_result,
+            ide_model=ide_model,
+            folder_model=folder_model,
+            include_objects=bool(getattr(args, "include_objects", False)),
+        )
+
 
 def run_validate(args):
     project_layout = _layout(args)
@@ -332,6 +344,16 @@ def main():
     parser_import = subparsers.add_parser("import", parents=[parent_parser])
     parser_import.add_argument(
         "--patch", required=True, help="Path to IMPORT.xml output"
+    )
+    parser_import.add_argument(
+        "--report",
+        default=None,
+        help="Optional path to also write the compare report JSON in the same pass",
+    )
+    parser_import.add_argument(
+        "--include-objects",
+        action="store_true",
+        help="Include object names and paths in the compare report",
     )
 
     # validate

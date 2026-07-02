@@ -78,6 +78,45 @@ def test_added_manifest_method_emits_create_text_object():
             os.remove(patch_path)
 
 
+def test_patch_with_non_ascii_content_is_ascii_encoded():
+    """Non-ASCII text (e.g. smart quotes) must be emitted as XML character
+    references so the CODESYS IronPython parser can read the patch."""
+    ide_model, folder_model = _build_models()
+    smart_quote_st = (
+        "METHOD PRIVATE _ClearRemoteButtons\n"
+        "VAR_INPUT\n"
+        "END_VAR\n\n"
+        "// --- implementation ---\n\n"
+        u"// set to 0 so \u201cover allowed length\u201d trips\n"
+    )
+    st_path = "TESTs/FB_RemoteController_TEST._ClearRemoteButtons.st"
+    folder_model.get_node(METHOD_GUID).metadata["projection_contents"] = {
+        st_path: smart_quote_st
+    }
+    diff_result = {"added": [METHOD_GUID], "modified": [], "deleted": []}
+    profile = load_profile("default")
+
+    with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as handle:
+        patch_path = handle.name
+
+    try:
+        builder = PatchBuilder(diff_result, ide_model, folder_model, profile=profile)
+        assert builder.build_patch(patch_path) is True
+
+        with open(patch_path, "rb") as handle:
+            raw = handle.read()
+        # The file must contain no raw non-ASCII bytes.
+        assert all(byte < 0x80 for byte in bytearray(raw))
+        assert b"&#8220;" in raw and b"&#8221;" in raw
+
+        # And it must still round-trip to the original Unicode when parsed.
+        text = ET.tostring(ET.parse(patch_path).getroot(), encoding="unicode")
+        assert u"\u201cover allowed length\u201d" in text
+    finally:
+        if os.path.exists(patch_path):
+            os.remove(patch_path)
+
+
 def test_deleted_method_emits_delete_text_object():
     ide_model = ProjectModel()
     folder_model = ProjectModel()

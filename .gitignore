@@ -4,3 +4,4 @@
 /src/ide_bridge/__pycache__
 /src/ide_bridge/__pycache__
 /cli/external_engine/__pycache__
+*.pyc
